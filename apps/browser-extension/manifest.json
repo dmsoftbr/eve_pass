@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "EVEPass",
+  "version": "0.0.0",
+  "description": "Autofill de credenciais via o app desktop EVEPass (native messaging). O cofre e as chaves nunca saem do app.",
+  "permissions": ["activeTab", "scripting", "nativeMessaging", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "EVEPass" }
+}

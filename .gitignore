@@ -1,0 +1,42 @@
+# Rust
+/target
+**/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Node / frontend
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/
+
+# Mobile generated build artifacts (produced by scripts/build-{ios,android}.sh)
+apps/mobile/native/ios/EvepassCore.xcframework/
+apps/mobile/native/ios/bindings/
+apps/mobile/native/ios/headers/
+apps/mobile/native/android/jniLibs/
+apps/mobile/native/android/bindings/
+
+# RN turbo-module: UBRN-generated bindings + iOS/Android build outputs
+apps/mobile/react-native-evepass-core/EvepassCoreFramework.xcframework/
+apps/mobile/react-native-evepass-core/cpp/generated/
+apps/mobile/react-native-evepass-core/src/generated/
+apps/mobile/react-native-evepass-core/**/Pods/
+apps/mobile/react-native-evepass-core/**/build/
+apps/mobile/react-native-evepass-core/**/.xcode.env.local
+apps/mobile/react-native-evepass-core/**/*.xcworkspace
+
+# Local secrets / env
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# Local CLI session cache (test harness)
+.evepass/
+
+# Editor
+.idea/
+.vscode/
+EVEPass_0.0.0_aarch64.dmg
+*.dmg

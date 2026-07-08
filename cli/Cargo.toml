@@ -1,0 +1,21 @@
+[package]
+name = "evepass-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "evepass"
+path = "src/main.rs"
+
+[dependencies]
+evepass-core = { path = "../core" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+anyhow = "1"
+hex = "0.4"

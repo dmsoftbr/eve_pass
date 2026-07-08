@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        width: 260px;
+        margin: 0;
+        padding: 12px;
+        font: 13px -apple-system, sans-serif;
+        background: #0b0b0f;
+        color: #eee;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .locked {
+        background: #f87171;
+      }
+      .unlocked {
+        background: #34d399;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #2a2a35;
+        background: #121218;
+        color: #eee;
+      }
+      #hits div {
+        padding: 6px 4px;
+        border-bottom: 1px solid #1a1a22;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div id="dot" class="dot locked"></div>
+      <strong>EVEPass</strong>
+      <span id="state" style="margin-left: auto; color: #8a8a99">—</span>
+    </div>
+    <input id="q" placeholder="Buscar no cofre…" />
+    <div id="hits"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

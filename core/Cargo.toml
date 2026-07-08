@@ -1,0 +1,43 @@
+[package]
+name = "evepass-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "evepass_core"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+argon2 = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+sha1 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+x25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true }
+getrandom = { workspace = true }
+rand_core = { workspace = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+totp-rs = { workspace = true }
+zxcvbn = { workspace = true }
+psl = { workspace = true }
+hpke = { workspace = true }
+ml-kem = { workspace = true }
+p256 = { workspace = true }
+uniffi = { workspace = true, features = ["cli"] }
+
+[[bin]]
+# Generates foreign-language bindings (Swift/Kotlin/Python) from the annotated core.
+# Not used at runtime by the desktop/CLI, which link the crate directly.
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dev-dependencies]
+hex = "0.4"

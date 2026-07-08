@@ -1,0 +1,8 @@
+# UBRN: build the local evepass-core crate into this turbo module.
+# `directory` = the Rust workspace root, relative to this RN library project.
+rust:
+  directory: ../../..
+  manifestPath: core/Cargo.toml
+bindings:
+  cpp: cpp/generated
+  ts: src/generated

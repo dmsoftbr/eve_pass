@@ -1,0 +1,20 @@
+{
+  "name": "evepass-mobile",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "ios": "react-native run-ios",
+    "android": "react-native run-android"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "react": "18.3.1",
+    "react-native": "0.76.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.11",
+    "typescript": "^5.6.2"
+  },
+  "comment": "Scaffold. Generate the bare RN project (react-native init / expo prebuild), link EvepassCore.xcframework (iOS) + jniLibs (Android), and the uniffi-bindgen-react-native module. See README.md."
+}

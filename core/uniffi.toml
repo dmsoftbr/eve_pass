@@ -1,0 +1,6 @@
+# UniFFI bindings configuration for the mobile builds.
+[bindings.swift]
+module_name = "EvepassCore"
+
+[bindings.kotlin]
+package_name = "com.evepass.core"

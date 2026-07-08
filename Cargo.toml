@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = ["core", "cli"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+authors = ["EVEPass"]
+
+[workspace.dependencies]
+# Crypto
+argon2 = "0.5"
+hkdf = "0.12"
+sha2 = "0.10"
+sha1 = "0.10"
+chacha20poly1305 = { version = "0.10", features = ["alloc"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+getrandom = "0.2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.6"
+# Encoding / serde
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Errors
+thiserror = "1"
+# TOTP
+totp-rs = { version = "5", features = ["otpauth"] }
+# Password strength
+zxcvbn = "3"
+# eTLD+1 domain matching (autofill)
+psl = "2"
+# HPKE (RFC 9180) for collection-key sharing
+hpke = { version = "0.12", features = ["x25519"] }
+# Post-quantum KEM (hybrid X25519 + ML-KEM-768) — Fase 5B
+ml-kem = "0.2"
+# P-256 ES256 for passkeys — Fase 5D
+p256 = { version = "0.13", features = ["ecdsa"] }
+# Bindings — pinned to match uniffi-bindgen-react-native (UBRN) for mobile.
+uniffi = "0.31"
+
+# Keep dev builds of the KDF fast enough to run tests without minutes of waiting.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
