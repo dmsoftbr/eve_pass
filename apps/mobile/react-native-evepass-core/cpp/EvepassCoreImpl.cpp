@@ -1,4 +1,5 @@
 #include "EvepassCoreImpl.h"
+#include "react-native-evepass-core.h"
 
 namespace facebook::react {
 
@@ -7,12 +8,12 @@ EvepassCoreImpl::EvepassCoreImpl(
 )
   : NativeEvepassCoreCxxSpec(std::move(jsInvoker)) {}
 
-double EvepassCoreImpl::multiply(
-  jsi::Runtime& rt,
-  double a,
-  double b
-) {
-  return a * b;
+bool EvepassCoreImpl::installRustCrate(jsi::Runtime& rt) {
+  return evepasscore::installRustCrate(rt, jsInvoker_);
+}
+
+bool EvepassCoreImpl::cleanupRustCrate(jsi::Runtime& rt) {
+  return evepasscore::cleanupRustCrate(rt);
 }
 
 }

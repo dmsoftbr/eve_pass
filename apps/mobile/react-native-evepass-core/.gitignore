@@ -80,7 +80,10 @@ lib/
 
 # React Native Codegen
 ios/generated
-android/generated
+# android/generated IS committed on purpose: package.json sets
+# `includesGeneratedCode: true`, so the consuming app expects the codegen
+# artifacts to ship with the library instead of regenerating them at build time.
+# Regenerate with: node_modules/.bin/bob build --target codegen
 
 # React Native Nitro Modules
 nitrogen/
