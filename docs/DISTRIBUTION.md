@@ -41,10 +41,54 @@ cd apps/desktop && npm run tauri build
 
 ### macOS — assinatura + notarização
 
-Sem assinar, cada usuário libera o Gatekeeper manualmente
-(`xattr -dr com.apple.quarantine /Applications/EVEPass.app`). Para distribuir ao
-time sem fricção, precisa de uma **conta Apple Developer (US$99/ano)**: com os
-secrets `APPLE_*` acima, o `tauri-action` assina e notariza automaticamente.
+**Status:** configurado. Certificado *Developer ID Application* criado, os secrets
+`APPLE_*` do CI estão setados e o job `macos-latest` está ativo no workflow — cada
+tag `v*` gera um DMG **universal (Intel + Apple Silicon) assinado e notarizado**.
+
+Sem assinar, o usuário teria que liberar o Gatekeeper na mão
+(`xattr -dr com.apple.quarantine /Applications/EVEPass.app`). Com a assinatura+
+notarização, o `.dmg` abre com duplo-clique, sem aviso.
+
+#### Build local assinado + notarizado (sem CI)
+
+Pré-requisitos (uma vez): certificado *Developer ID Application* no keychain
+(Xcode → Settings → Accounts → Manage Certificates → `+`) e uma **app-specific
+password** (appleid.apple.com). Depois:
+
+```bash
+cd apps/desktop
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Diogo Moreira (WCJ5WCJ3N4)"
+export APPLE_ID="<apple-id-email>"
+export APPLE_PASSWORD="<app-specific-password>"   # NÃO commitar; é revogável
+export APPLE_TEAM_ID="WCJ5WCJ3N4"
+npm run tauri build
+# → o Tauri assina o .app, notariza (notarytool) e faz staple; gera o .dmg em
+#   src-tauri/target/release/bundle/dmg/EVEPass_<versão>_aarch64.dmg
+```
+
+O Tauri notariza o **.app**, mas não o **.dmg** em si. Para o download abrir 100%
+limpo, notarize+staple o próprio DMG também:
+
+```bash
+DMG=src-tauri/target/release/bundle/dmg/EVEPass_<versão>_aarch64.dmg
+xcrun notarytool submit "$DMG" --apple-id "<email>" --password "<app-pass>" \
+  --team-id WCJ5WCJ3N4 --wait
+xcrun stapler staple "$DMG"
+# valida:  spctl --assess -t open --context context:primary-signature -vv "$DMG"
+#          → "accepted / source=Notarized Developer ID"
+```
+
+#### Regenerar o secret do certificado (se rotacionar)
+
+O CI importa o cert de `APPLE_CERTIFICATE` (base64 de um `.p12`) + `APPLE_CERTIFICATE_PASSWORD`:
+
+```bash
+security export -k ~/Library/Keychains/login.keychain-db -t identities \
+  -f pkcs12 -P "<senha-p12>" -o devid.p12
+base64 -i devid.p12 | gh secret set APPLE_CERTIFICATE
+printf '%s' "<senha-p12>" | gh secret set APPLE_CERTIFICATE_PASSWORD
+rm devid.p12
+```
 
 ### Windows
 

@@ -28,10 +28,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS builds are done locally (npm run tauri build) — a macOS runner
-          # costs 10x the minutes and would need Apple signing certs to bundle.
-          # Re-add `{ platform: macos-latest, args: '--target universal-apple-darwin' }`
-          # here once the APPLE_* signing secrets are configured.
+          # macOS: universal (Intel + Apple Silicon), assinado + notarizado via os
+          # secrets APPLE_* (já configurados). Runner macOS custa ~10x os minutos.
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
           - platform: ubuntu-22.04
             args: ''
           - platform: windows-latest
@@ -55,6 +55,9 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # apple targets p/ o build universal do macOS (inócuo nos outros runners)
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
         with:
