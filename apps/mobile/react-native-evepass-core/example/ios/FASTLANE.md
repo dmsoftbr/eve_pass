@@ -75,10 +75,9 @@ bundle exec fastlane release
 
 Estas **não** são resolvidas pelo fastlane — são decisões/artefatos que faltam:
 
-1. **Ícone do app** ⚠️ — o `AppIcon.appiconset` do iOS está **vazio** (sem PNGs).
-   A App Store exige um ícone 1024×1024. Precisamos de um PNG-fonte do keyhole roxo
-   em 1024px pra gerar todos os tamanhos. (No Android o maior existente é 192px,
-   pequeno demais pra reaproveitar.)
+1. **Ícone do app** ✅ — resolvido. `AppIcon.appiconset` tem o ícone 1024×1024
+   (keyhole roxo, full-bleed, sem alpha — o iOS aplica a máscara arredondada).
+   O actool gera os demais tamanhos a partir dele.
 2. **Export compliance (criptografia)** ⚠️ — o app usa cripto forte (Argon2id,
    XChaCha20). No primeiro upload a Apple pergunta sobre `ITSAppUsesNonExemptEncryption`.
    Gerenciadores de senha em geral se enquadram na isenção de "autenticação", mas é
