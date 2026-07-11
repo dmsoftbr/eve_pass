@@ -78,12 +78,14 @@ Estas **não** são resolvidas pelo fastlane — são decisões/artefatos que fa
 1. **Ícone do app** ✅ — resolvido. `AppIcon.appiconset` tem o ícone 1024×1024
    (keyhole roxo, full-bleed, sem alpha — o iOS aplica a máscara arredondada).
    O actool gera os demais tamanhos a partir dele.
-2. **Export compliance (criptografia)** ⚠️ — o app usa cripto forte (Argon2id,
-   XChaCha20). No primeiro upload a Apple pergunta sobre `ITSAppUsesNonExemptEncryption`.
-   Gerenciadores de senha em geral se enquadram na isenção de "autenticação", mas é
-   uma **decisão sua**: ou adiciona `<key>ITSAppUsesNonExemptEncryption</key><false/>`
-   no `Info.plist` (se confirmar a isenção), ou responde o questionário/auto-classificação
-   a cada envio.
+2. **Export compliance (criptografia)** ✅ configurado (com obrigação anual) — o
+   `Info.plist` declara `ITSAppUsesNonExemptEncryption = true` (o app cifra o cofre;
+   não é isento). Isso usa a isenção de **mercado de massa** (License Exception ENC):
+   algoritmos padrão, **sem CCATS**. Falta você, **uma vez**, no App Store Connect,
+   selecionar a exceção correspondente quando pedir a documentação de export, e depois
+   **enviar o relatório anual de auto-classificação** à BIS/NSA (`crypt@bis.doc.gov` +
+   `enc@nsa.gov`) — é o mesmo caminho de 1Password/Bitwarden. Sem isso o build não
+   distribui na loja.
 3. **Política de privacidade** (URL obrigatória) + questionário *App Privacy*.
 4. **Screenshots** por tamanho de tela + descrição/categoria (pode preencher no
    App Store Connect na 1ª vez; depois `bundle exec fastlane deliver init` versiona).
