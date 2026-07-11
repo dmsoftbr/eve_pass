@@ -1,8 +1,9 @@
 # EVEPass — Status de implementação
 
-> Fonte única de progresso. Atualizado em **2026-07-06**.
-> (Fase 3: core mobile + pipeline de build compilando; app RN/extensões em scaffold.
-> Fase 4: sharing E2E via HPKE + recuperação — core testado, desktop compila.)
+> Fonte única de progresso. Atualizado em **2026-07-09**.
+> (Mobile Android M1–M4 construídos e validados no emulador: cofre online + biometria + autofill
+> (serviço registrado) + coleções/HPKE. APK release roda no device. Aceites finais no aparelho físico:
+> biometria real, autofill em app nativo, sharing com 2ª conta.)
 > Legenda: ✅ implementado e compilando · 🟡 pendente de validação runtime · ⬜ não iniciado.
 >
 > "Validação runtime" = rodar de fato contra um projeto Supabase provisionado e,
@@ -81,14 +82,92 @@ compila para **iOS** (xcframework) e **Android** (.so) via UniFFI.
 - [x] **Android:** `libevepass_core.so` (arm64-v8a + x86_64) + bindings Kotlin **gerados e compilando**
 - [x] Bindings expõem as 4 novas funções (verificado em Swift e Kotlin)
 
-**Scaffold (código dos pontos de integração; build/run completo precisa de projeto RN + device):**
+**M1 — App RN usável (online) ✅ APK gerado e roda no device/emulador (arm64-v8a):**
 
-- [~] App RN: bridge do core (`src/lib/core.ts`), telas unlock/cofre, sync (mirror da Fase 1)
-- [~] iOS: extensão `ASCredentialProviderViewController` + `BiometricVault` (Keychain/App Group)
-- [~] Android: `AutofillService` + `BiometricVault` (Keystore/BiometricPrompt)
-- [ ] ⬜ Gerar o projeto RN bare, linkar xcframework/jniLibs + `uniffi-bindgen-react-native`,
-      completar telas, e wire dos targets de extensão (Xcode/Gradle)
-- [ ] 🟡 Aceite runtime: autofill em Safari/Chrome + apps, biometria, offline, invalidação por troca de biometria
+O app real vive no projeto que builda de fato: `apps/mobile/react-native-evepass-core/example/`
+(turbo module UBRN + bindings gerados do core). Telas em `example/src/`:
+
+- [x] Camada de rede Supabase no JS (`lib/supabase.ts`): prelogin, signup, login, profiles,
+      items CRUD (upsert/soft-delete), Realtime — mirror da Fase 1, RN-flavored (AsyncStorage + url-polyfill)
+- [x] Bridge do core (`lib/core.ts`) sobre os bindings UBRN reais; base64↔ArrayBuffer (`lib/bytes.ts`)
+- [x] Auth (`lib/auth.ts`): `createAccount`/`deriveAuthKey`/`unlock` — vaultKey fica na `Session` (Rust)
+- [x] Telas: **AuthScreen** (login/signup), **RecoveryCodeScreen** (código único), **VaultListScreen**
+      (busca + quick-copy), **ItemDetailScreen** (revelar/copiar + TOTP ao vivo), **ItemFormScreen**
+      (add/editar + gerador inline), **GeneratorScreen**
+- [x] Estado (`state/vault.tsx`): itens decifrados em memória, Realtime, auto-lock em background,
+      clipboard com auto-clear (`lib/clipboard.ts`)
+- [x] `tsc` limpo (0 erros no app) · `assembleRelease` OK · APK instalado no emulador, AuthScreen renderiza
+- [x] APK: `apps/mobile/react-native-evepass-core/example/android/app/build/outputs/apk/release/app-release.apk`
+- Desvio consciente do mobile: sem `copy_field` nos bindings → o valor cruza o JS até o clipboard nativo
+      (mitigado com auto-clear). No desktop a cópia acontece dentro do Rust.
+- [x] **iOS:** app compila e roda no **simulador** (`xcodebuild` OK, AuthScreen renderiza no iPhone 17 Pro).
+      Destravado o codegen RN do iOS: `includesGeneratedCode: true` faz o build da app pular a lib, então os
+      artefatos de codegen precisam ser versionados — só existiam para Android. Gerados em `ios/generated/`
+      (`react-native/scripts/generate-codegen-artifacts.js -t ios -s library`), `.gitignore` ajustado para
+      versioná-los, e `EvepassCore.podspec` passou a incluir `.cpp` no glob de `ios/generated`.
+      Falta: assinatura Apple para build em device físico + publicação na App Store.
+
+**M2 — Biometria (Android) ✅ código completo, compila/linka/carrega no device:**
+
+- [x] Módulo nativo Kotlin `BiometricVault` (`android/app/src/main/java/evepasscore/example/biometric/`):
+      chave AES no Android Keystore com `setUserAuthenticationRequired(true)` +
+      `setInvalidatedByBiometricEnrollment(true)`; cifra/decifra a vaultKey sob `BiometricPrompt`
+      (CryptoObject); trata `KeyPermanentlyInvalidatedException` → limpa e força re-login por senha
+- [x] Package registrado no `MainApplication`; dep `androidx.biometric:1.1.0`; `assembleRelease` OK
+- [x] JS: `lib/biometric.ts` + `core.exportVaultKeyB64`/`sessionFromVaultKeyB64`; telas
+      `EnableBiometricScreen` (oferta pós-login) + botão na `AuthScreen` + fases no `App.tsx`
+- [x] **Validado no emulador (API 31, digital simulada):** signup → código de recuperação → cofre →
+      ativar biometria (BiometricPrompt real + toque) → adicionar item (cifra + grava no Supabase) →
+      **travar → cold start → desbloquear por biometria → item vem do Supabase e decifra**. Fluxo M1+M2 fecha.
+- [x] **Bug corrigido:** `lib/bytes.ts` `b64ToBytes` truncava 1–2 bytes (subtraía padding de um comprimento
+      que já o excluía) → salt/blobs corrompidos → "Invalid login credentials". Sem isso, login nunca funcionava.
+- [x] `lock()` mantém a sessão do Supabase (só descarta a vaultKey) para o unlock biométrico reaproveitá-la.
+- [ ] 🟡 Aceite final **no aparelho físico**: digital/rosto reais + invalidação ao trocar biometria do aparelho
+- Desvio (escopo mobile): a vaultKey cruza o JS 1x no enable e 1x no unlock (a `Session` UBRN não é
+      acessível do código nativo); nunca é persistida em claro nem logada.
+
+**M3 — Autofill (Android) ✅ construído, compila, serviço registrado no SO:**
+
+- [x] `EvepassAutofillService` (Kotlin): detecta campos usuário/senha + domínio/package (heurística
+      hints/inputType), responde com autenticação → `AutofillAuthActivity`
+- [x] `AutofillAuthActivity`: BiometricPrompt → `VaultKeystore.open` → `sessionFromVaultKey` →
+      decifra o cache → `matchCredentials` (eTLD+1) → `extractCredential` → `Dataset` de volta
+- [x] Decifra **no processo do autofill** via bindings **UniFFI Kotlin + JNA** (`libevepass_core.so`),
+      coexistindo com o UBRN (que linka o Rust estático em `libappmodules.so`) — sem colisão
+- [x] Cache offline de ciphertext (`AutofillCacheModule` RN → `filesDir/vault_cache.json`, gravado
+      pelo `VaultProvider.refresh`); `VaultCache` lê e decifra; `VaultKeystore` compartilhado com o M2
+- [x] Manifest: `<service BIND_AUTOFILL_SERVICE>` + activity translúcida; `assembleRelease` OK
+- [x] **Verificado no emulador:** APK instala, `dumpsys autofill` mostra
+      `Component: EvepassAutofillService` como serviço ativo; cofre destrava e popula o cache
+- [ ] 🟡 Aceite do preenchimento visual: o Chrome (v149) usa o gerenciador do Google por padrão e não
+      delega a serviços de terceiros → testar em **app nativo** (sempre usa o autofill do Android) ou
+      com a opção de terceiros do Chrome ligada, no aparelho físico
+
+**M4 — Coleções / compartilhamento (HPKE) ✅ construído e validado no emulador:**
+
+- [x] `core.ts`: wrappers de `loadPrivateKeys`, `loadCollectionKeys`, `createCollection`,
+      `wrapCollectionKeyFor`, `decryptCollectionName`, `encryptCollectionItem`, `decryptCollectionItem`,
+      `publicKeyFingerprint` (base64 ↔ ArrayBuffer)
+- [x] `supabase.ts`: `getMyPublicKeys`, `getPublicKeyByEmail`, `fetchMyCollectionMembers`,
+      `fetchCollections`, `insertCollection`, `upsertCollectionMember`, `upsertItem` com `collection_id`
+- [x] `auth.ts`: `hydrateCollections` (loadPrivateKeys + loadCollectionKeys) após unlock — nos dois
+      caminhos (senha e biometria)
+- [x] `vault.tsx`: itens de coleção decifrados via `decryptCollectionItem`; estado de coleções;
+      `createCollection` (auto-membro admin), `lookupRecipient`, `shareCollection`
+- [x] UI: chips de filtro (Pessoal + coleções) na lista, seletor de coleção no form,
+      `CollectionsScreen` (criar + compartilhar com verificação de fingerprint + papel reader/writer/admin)
+- [x] **Validado ao vivo no emulador:** criar coleção "Equipe" (nome cifrado, RLS `is_owner` no insert do
+      membro) → adicionar item na coleção (`encrypt_collection_item`) → **travar → destravar por biometria →
+      `hydrateCollections` reabre a chave via HPKE → item de coleção decifra**. Round-trip Fase 4 fecha.
+- [ ] 🟡 Compartilhar com um **segundo usuário** real (mesmo código de `wrapCollectionKeyFor` +
+      `upsertCollectionMember` que a auto-associação já exercita) — precisa de 2 contas/dispositivos
+
+- [ ] ⬜ **M3 Autofill:** `AutofillService` (Kotlin) + cache offline compartilhado
+- [ ] ⬜ **M4 Coleções:** telas de compartilhamento (core já expõe HPKE/coleções)
+- [ ] ⬜ iOS: extensão `ASCredentialProviderViewController` + `BiometricVault` (Keychain/App Group)
+- [ ] 🟡 Aceite runtime: signup/login live contra o Supabase no aparelho, autofill, biometria, offline
+- Nota: as telas antigas em `apps/mobile/src/` são um scaffold anterior (imports para módulos inexistentes);
+      o app vivo é o do `example/`.
 
 Detalhes de build e ativação no SO: `apps/mobile/README.md`.
 
