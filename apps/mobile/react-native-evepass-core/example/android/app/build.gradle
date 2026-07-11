@@ -85,6 +85,9 @@ android {
         versionCode 3
         versionName "0.1.1"
     }
+    // Keystore de release vem do ambiente (CI: secrets; local: export das vars).
+    // Sem ele, o release cai no debug keystore — ok só p/ dev local.
+    def releaseStoreFile = System.getenv("RELEASE_STORE_FILE")
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -92,15 +95,21 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (releaseStoreFile) {
+            release {
+                storeFile file(releaseStoreFile)
+                storePassword System.getenv("RELEASE_STORE_PASSWORD")
+                keyAlias System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig releaseStoreFile ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
