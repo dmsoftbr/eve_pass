@@ -110,3 +110,74 @@ jobs:
           xcrun stapler staple "$DMG"
           gh release upload "${{ github.ref_name }}" "$DMG" --clobber \
             --repo "${{ github.repository }}"
+
+  # Builda o APK Android (core Rust via UBRN/cargo-ndk + assembleRelease assinado
+  # com o keystore de release) e anexa ao mesmo release. Roda após o desktop pra
+  # o release (rascunho) já existir.
+  android:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack (yarn 4)
+        run: corepack enable
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK + CMake
+        run: sdkmanager "ndk;27.1.12297006" "cmake;3.22.1"
+
+      - name: Export ANDROID_NDK_HOME
+        run: echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.1.12297006" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Install JS deps (yarn workspace)
+        working-directory: apps/mobile/react-native-evepass-core
+        run: yarn install --immutable
+
+      - name: Build core + bindings + .so (UBRN)
+        working-directory: apps/mobile/react-native-evepass-core
+        run: ./node_modules/.bin/ubrn build android --config ubrn.config.yaml
+
+      - name: Decode release keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Assemble release APK (assinado)
+        working-directory: apps/mobile/react-native-evepass-core/example/android
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/release.keystore
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload APK ao release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          SRC=apps/mobile/react-native-evepass-core/example/android/app/build/outputs/apk/release/app-release.apk
+          cp "$SRC" "EVEPass_${V}_android.apk"
+          gh release upload "$GITHUB_REF_NAME" "EVEPass_${V}_android.apk" --clobber \
+            --repo "$GITHUB_REPOSITORY"

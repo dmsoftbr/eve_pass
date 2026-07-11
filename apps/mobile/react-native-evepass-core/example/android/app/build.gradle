@@ -82,8 +82,8 @@ android {
         applicationId "evepasscore.example"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "0.1.1"
+        versionCode 4
+        versionName "0.1.2"
     }
     // Keystore de release vem do ambiente (CI: secrets; local: export das vars).
     // Sem ele, o release cai no debug keystore — ok só p/ dev local.
