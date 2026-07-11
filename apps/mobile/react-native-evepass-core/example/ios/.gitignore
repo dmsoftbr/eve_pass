@@ -1,0 +1,14 @@
+# Segredos e artefatos de build/publicação (fastlane)
+fastlane/.env
+fastlane/*.p8
+fastlane/AuthKey*.p8
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output
+fastlane/README.md
+
+# Saída de build (gym)
+build/
+*.ipa
+*.xcarchive
+*.dSYM.zip

@@ -273,7 +273,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = evepasscore.example;
+				PRODUCT_BUNDLE_IDENTIFIER = br.com.dmsoft.evepass;
 				PRODUCT_NAME = EvepassCoreExample;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -300,7 +300,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = evepasscore.example;
+				PRODUCT_BUNDLE_IDENTIFIER = br.com.dmsoft.evepass;
 				PRODUCT_NAME = EvepassCoreExample;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";

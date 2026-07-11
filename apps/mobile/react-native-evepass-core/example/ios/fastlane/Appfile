@@ -1,0 +1,16 @@
+# Identidade do app na App Store. Valores sensíveis vêm de variáveis de ambiente
+# (veja fastlane/.env.example) para não versionar segredos.
+
+app_identifier(ENV["EVEPASS_APP_IDENTIFIER"] || "br.com.dmsoft.evepass")
+
+# E-mail da conta Apple (Developer Program). Usado só como fallback — o upload
+# usa a App Store Connect API key (sem 2FA), configurada no Fastfile.
+apple_id(ENV["EVEPASS_APPLE_ID"]) if ENV["EVEPASS_APPLE_ID"]
+
+# Team ID do Apple Developer Program (10 caracteres, ex. "ABCDE12345").
+# Encontra em https://developer.apple.com/account -> Membership.
+team_id(ENV["EVEPASS_TEAM_ID"]) if ENV["EVEPASS_TEAM_ID"]
+
+# Team ID do App Store Connect (normalmente igual, mas pode diferir em contas
+# com múltiplas equipes). Opcional.
+itc_team_id(ENV["EVEPASS_ITC_TEAM_ID"]) if ENV["EVEPASS_ITC_TEAM_ID"]

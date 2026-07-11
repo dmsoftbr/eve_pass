@@ -1,0 +1,147 @@
+# Fastfile — build e publicação do EVEPass (iOS) na App Store.
+#
+# Divisão de responsabilidades:
+#   - ASSINATURA do build: Xcode "Automatic signing" com o seu Team (o Mac precisa
+#     estar logado na conta Apple no Xcode). `-allowProvisioningUpdates` deixa o
+#     xcodebuild criar/baixar o profile de distribuição sozinho.
+#   - UPLOAD para TestFlight/App Store: App Store Connect API key (sem 2FA).
+#
+# Segredos vêm de env (fastlane/.env.example lista todos). Rode de dentro de
+#   apps/mobile/react-native-evepass-core/example/ios/
+# com:  bundle exec fastlane beta     (TestFlight)
+#       bundle exec fastlane release  (App Store)
+
+default_platform(:ios)
+
+WORKSPACE = "EvepassCoreExample.xcworkspace"
+SCHEME    = "EvepassCoreExample"
+
+# Carrega a App Store Connect API key a partir do ambiente, se presente.
+# Necessária para os passos de upload (pilot/deliver) e para consultar o
+# número de build mais recente. Sem ela, esses passos pedem login interativo.
+def load_asc_api_key
+  return nil unless ENV["ASC_KEY_ID"] && ENV["ASC_ISSUER_ID"]
+
+  filepath = ENV["ASC_KEY_PATH"]
+  content  = ENV["ASC_KEY_CONTENT"]
+
+  app_store_connect_api_key(
+    key_id: ENV["ASC_KEY_ID"],
+    issuer_id: ENV["ASC_ISSUER_ID"],
+    key_filepath: (filepath if filepath && !filepath.empty?),
+    key_content: (content if content && !content.empty?),
+    is_key_content_base64: content && !content.empty?,
+    in_house: false
+  )
+end
+
+platform :ios do
+  before_all do
+    ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] ||= "120"
+  end
+
+  desc "Recompila o evepass-core e regenera o EvepassCoreFramework.xcframework (device + simulador, release)"
+  lane :core do
+    # A config do UBRN e o node_modules ficam na raiz do pacote RN (dois níveis
+    # acima de ios/). O xcframework é um artefato de build (não versionado), então
+    # precisa ser regenerado com a fatia de device antes de arquivar pra loja.
+    rustup_prefix = `brew --prefix rustup 2>/dev/null`.strip
+    path_prefix = rustup_prefix.empty? ? "" : "PATH=\"#{rustup_prefix}/libexec/bin:$PATH\" "
+    sh("cd ../.. && #{path_prefix}./node_modules/.bin/ubrn build ios --release --config ubrn.config.yaml")
+  end
+
+  desc "Instala os Pods (CocoaPods) do projeto"
+  lane :pods do
+    cocoapods(
+      podfile: "./Podfile",
+      try_repo_update_on_error: true
+    )
+  end
+
+  desc "Gera um .ipa assinado (Release, export app-store)"
+  lane :build do
+    api_key = load_asc_api_key
+    pods
+
+    team = ENV["EVEPASS_TEAM_ID"]
+    UI.user_error!("Defina EVEPASS_TEAM_ID (Team do Developer Program).") if team.nil? || team.empty?
+
+    # Número de build: um a mais que o último no TestFlight (evita conflito no upload).
+    if api_key
+      latest = latest_testflight_build_number(
+        api_key: api_key,
+        app_identifier: ENV["EVEPASS_APP_IDENTIFIER"] || "br.com.dmsoft.evepass",
+        initial_build_number: 0
+      ) rescue 0
+      increment_build_number(
+        xcodeproj: "EvepassCoreExample.xcodeproj",
+        build_number: (latest.to_i + 1).to_s
+      )
+    end
+
+    gym(
+      workspace: WORKSPACE,
+      scheme: SCHEME,
+      configuration: "Release",
+      clean: true,
+      export_method: "app-store",
+      output_directory: "build/ipa",
+      output_name: "EVEPass.ipa",
+      xcargs: "-allowProvisioningUpdates DEVELOPMENT_TEAM=#{team} CODE_SIGN_STYLE=Automatic",
+      export_options: {
+        signingStyle: "automatic",
+        teamID: team
+      }
+    )
+  end
+
+  desc "Build + upload para o TestFlight"
+  lane :beta do
+    api_key = load_asc_api_key
+    UI.user_error!("Configure a App Store Connect API key (ASC_KEY_ID/ISSUER/PATH).") unless api_key
+    core unless ENV["EVEPASS_SKIP_CORE"] == "1"
+    build
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: ENV["EVEPASS_APP_IDENTIFIER"] || "br.com.dmsoft.evepass",
+      ipa: "build/ipa/EVEPass.ipa",
+      skip_waiting_for_build_processing: true
+    )
+    UI.success("Build enviado ao TestFlight. Acompanhe o processamento no App Store Connect.")
+  end
+
+  desc "Build + envio para revisão da App Store"
+  lane :release do
+    api_key = load_asc_api_key
+    UI.user_error!("Configure a App Store Connect API key (ASC_KEY_ID/ISSUER/PATH).") unless api_key
+    core unless ENV["EVEPASS_SKIP_CORE"] == "1"
+    build
+    upload_to_app_store(
+      api_key: api_key,
+      app_identifier: ENV["EVEPASS_APP_IDENTIFIER"] || "br.com.dmsoft.evepass",
+      ipa: "build/ipa/EVEPass.ipa",
+      # Metadados/screenshots ainda não versionados — pule por enquanto e preencha
+      # no App Store Connect na primeira submissão. Depois dê `deliver init`.
+      skip_metadata: true,
+      skip_screenshots: true,
+      precheck_include_in_app_purchases: false,
+      submit_for_review: false,
+      force: true
+    )
+    UI.success("Build no App Store Connect. Finalize metadados/screenshots e submeta a revisão.")
+  end
+
+  desc "Cria o registro do app no App Store Connect (uma vez, se ainda não existe)"
+  lane :bootstrap do
+    api_key = load_asc_api_key
+    UI.user_error!("Configure a App Store Connect API key para criar o app.") unless api_key
+    produce(
+      api_key: api_key,
+      app_identifier: ENV["EVEPASS_APP_IDENTIFIER"] || "br.com.dmsoft.evepass",
+      app_name: ENV["EVEPASS_APP_NAME"] || "EVEPass",
+      language: "pt-BR",
+      app_version: "1.0",
+      sku: ENV["EVEPASS_APP_SKU"] || "evepass-ios"
+    )
+  end
+end

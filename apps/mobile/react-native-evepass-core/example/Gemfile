@@ -14,3 +14,6 @@ gem 'bigdecimal'
 gem 'logger'
 gem 'benchmark'
 gem 'mutex_m'
+
+# Build/publish automation for the App Store (see ios/fastlane/).
+gem 'fastlane'
