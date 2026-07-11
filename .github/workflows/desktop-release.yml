@@ -91,3 +91,22 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # O tauri-action notariza o .app, mas não o .dmg em si. Sem isso o dmg
+      # baixado dispara o Gatekeeper. Notariza+staple o dmg e re-sobe (clobber).
+      - name: Notarize + staple the DMG (macOS)
+        if: matrix.platform == 'macos-latest' && env.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DMG=$(find apps/desktop/src-tauri/target -name '*.dmg' | head -1)
+          echo "Notarizing $DMG"
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+          gh release upload "${{ github.ref_name }}" "$DMG" --clobber \
+            --repo "${{ github.repository }}"
