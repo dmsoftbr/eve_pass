@@ -82,8 +82,8 @@ android {
         applicationId "evepasscore.example"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "0.1.0"
     }
     signingConfigs {
         debug {
@@ -110,6 +110,12 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // M2 — biometric unlock (BiometricPrompt + Keystore)
+    implementation("androidx.biometric:biometric:1.1.0")
+
+    // M3 — autofill: UniFFI Kotlin bindings talk to libevepass_core.so via JNA
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
