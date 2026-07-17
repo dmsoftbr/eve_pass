@@ -117,6 +117,10 @@ jobs:
   android:
     needs: build
     runs-on: ubuntu-latest
+    # Non-blocking: the desktop release must publish even if the mobile UBRN
+    # pipeline (bindings/metro/signing) fails. Fix the Android build as its own
+    # focused task; don't hold desktop installers hostage to it.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
