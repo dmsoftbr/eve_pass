@@ -52,8 +52,8 @@ pub fn derive_enc_auth(master_key: &[u8; KEY_LEN]) -> Result<(Key, Key)> {
 /// kit, so a server breach + weak master password is not enough to brute-force
 /// the vault offline. This rides the params-version part of the agility layer:
 /// enabling it on an account just re-derives + re-wraps the vault key (items are
-/// not re-encrypted).
-#[allow(dead_code)] // validated by tests; wired into onboarding when the Secret Key UX lands
+/// not re-encrypted). Wired into the live opt-in flow via
+/// [`crate::account::Session::enable_secret_key`] + [`crate::account::unlock_with_secret`].
 pub fn derive_enc_auth_with_secret(master_key: &[u8; KEY_LEN], secret_key: &[u8]) -> Result<(Key, Key)> {
     let enc = hkdf32_salted(master_key, Some(secret_key), INFO_ENC)?;
     let auth = hkdf32_salted(master_key, Some(secret_key), INFO_AUTH)?;

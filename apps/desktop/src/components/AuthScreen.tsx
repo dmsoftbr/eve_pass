@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useVault } from "../state/vault";
-import { doRecover } from "../lib/auth";
+import { doRecover, LAST_EMAIL_KEY } from "../lib/auth";
 
 type Mode = "login" | "signup" | "recover";
 
 // Only the e-mail is remembered — never the master password.
 const REMEMBER_KEY = "evepass:rememberEmail";
-const LAST_EMAIL_KEY = "evepass:lastEmail";
 
 function strength(pw: string): { score: number; label: string } {
   let s = 0;

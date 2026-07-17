@@ -17,18 +17,34 @@ pub struct KeyPair {
     pub public_key: [u8; 32],
     /// Ed25519 public key (32 bytes) — stored in the clear in `profiles`.
     pub signing_public_key: [u8; 32],
-    /// `AEAD(vaultKey, {x25519, ed25519 seeds})` — stored in `profiles`.
+    /// Fase 5B — ML-KEM-768 encapsulation (public) key, published alongside the
+    /// X25519 pub so senders can hybrid-wrap collection keys for this recipient.
+    pub mlkem_public_key: Vec<u8>,
+    /// `AEAD(vaultKey, {x25519, ed25519, mlkem seeds/keys})` — stored in `profiles`.
     pub wrapped_private_keys: Vec<u8>,
 }
 
+/// The private halves, wrapped with the vault key. `mlkem` is optional so blobs
+/// written before Fase 5B still deserialize (older accounts have no PQ key).
 #[derive(Serialize, Deserialize, zeroize::ZeroizeOnDrop)]
 struct PrivateKeys {
     x25519: [u8; 32],
     ed25519: [u8; 32],
+    /// ML-KEM-768 decapsulation (private) key bytes. Empty on pre-5B accounts.
+    #[serde(default)]
+    mlkem: Vec<u8>,
 }
 
-/// Generate a fresh X25519 + Ed25519 pair and wrap the private halves with the
-/// vault key.
+/// The unwrapped private keys, for loading into a `Session`.
+pub struct PrivateKeyMaterial {
+    pub x25519: StaticSecret,
+    pub ed25519: SigningKey,
+    /// ML-KEM decapsulation key, empty if this account predates Fase 5B.
+    pub mlkem_dk: Vec<u8>,
+}
+
+/// Generate a fresh X25519 + Ed25519 + ML-KEM-768 keypair and wrap the private
+/// halves with the vault key.
 pub fn generate(vault_key: &[u8; 32]) -> Result<KeyPair> {
     let mut x_seed = Zeroizing::new([0u8; 32]);
     let mut ed_seed = Zeroizing::new([0u8; 32]);
@@ -40,7 +56,13 @@ pub fn generate(vault_key: &[u8; 32]) -> Result<KeyPair> {
     let signing = SigningKey::from_bytes(&ed_seed);
     let verifying = signing.verifying_key();
 
-    let priv_keys = PrivateKeys { x25519: *x_seed, ed25519: *ed_seed };
+    let mlkem = crate::pq::generate_mlkem_keypair();
+
+    let priv_keys = PrivateKeys {
+        x25519: *x_seed,
+        ed25519: *ed_seed,
+        mlkem: mlkem.decapsulation_key.to_vec(),
+    };
     let json = serde_json::to_vec(&priv_keys).map_err(|e| CoreError::Serde(e.to_string()))?;
     let json = Zeroizing::new(json);
     let wrapped = envelope::encrypt(vault_key, &json, AAD_PRIVATE_KEYS)?;
@@ -48,6 +70,7 @@ pub fn generate(vault_key: &[u8; 32]) -> Result<KeyPair> {
     Ok(KeyPair {
         public_key: x_public.to_bytes(),
         signing_public_key: verifying.to_bytes(),
+        mlkem_public_key: mlkem.encapsulation_key,
         wrapped_private_keys: wrapped,
     })
 }
@@ -61,15 +84,18 @@ pub fn unwrap_private_keys(vault_key: &[u8; 32], wrapped: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Reconstruct the X25519 secret + Ed25519 signing key from the wrapped blob.
-/// Used at unlock to enable collection (HPKE) sharing.
-pub fn open_private_keys(vault_key: &[u8; 32], wrapped: &[u8]) -> Result<(StaticSecret, SigningKey)> {
+/// Reconstruct the X25519 secret + Ed25519 signing key + ML-KEM decapsulation
+/// key from the wrapped blob. Used at unlock to enable collection sharing
+/// (HPKE v1 and hybrid PQ v2).
+pub fn open_private_keys(vault_key: &[u8; 32], wrapped: &[u8]) -> Result<PrivateKeyMaterial> {
     let plain = envelope::decrypt(vault_key, wrapped, AAD_PRIVATE_KEYS)?;
     let plain = Zeroizing::new(plain);
     let keys: PrivateKeys = serde_json::from_slice(&plain).map_err(|e| CoreError::Serde(e.to_string()))?;
-    let x25519 = StaticSecret::from(keys.x25519);
-    let ed25519 = SigningKey::from_bytes(&keys.ed25519);
-    Ok((x25519, ed25519))
+    Ok(PrivateKeyMaterial {
+        x25519: StaticSecret::from(keys.x25519),
+        ed25519: SigningKey::from_bytes(&keys.ed25519),
+        mlkem_dk: keys.mlkem.clone(),
+    })
 }
 
 #[cfg(test)]

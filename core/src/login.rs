@@ -38,6 +38,21 @@ pub fn begin_login(password: &str, salt: &[u8], params: &KdfParams) -> Result<Lo
     Ok(LoginContext { enc_key: enc, auth_key_b64 })
 }
 
+/// Fase 5C — two-step login for an account with a Secret Key enabled: the Secret
+/// Key salts the HKDF so both `encKey` and `authKey` differ from the no-secret
+/// path. The device must hold the Secret Key.
+pub fn begin_login_with_secret(
+    password: &str,
+    salt: &[u8],
+    params: &KdfParams,
+    secret_key: &[u8],
+) -> Result<LoginContext> {
+    let master = Zeroizing::new(kdf::derive_master_key(password, salt, params)?);
+    let (enc, auth) = keys::derive_enc_auth_with_secret(&master, secret_key)?;
+    let auth_key_b64 = base64::engine::general_purpose::STANDARD.encode(auth.as_slice());
+    Ok(LoginContext { enc_key: enc, auth_key_b64 })
+}
+
 impl LoginContext {
     /// The base64 `authKey` to hand to `signInWithPassword`.
     pub fn auth_key_b64(&self) -> &str {

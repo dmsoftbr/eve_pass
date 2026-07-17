@@ -4,10 +4,11 @@ Autofill no navegador **sem cofre próprio**: a extensão (MV3) conversa com o a
 desktop por **native messaging** (IPC local, não rede). O app detém a `Session`
 e as chaves; a credencial só cruza para a extensão **no momento do fill**.
 
-> **Estado:** scaffold funcional da extensão (content/background/popup) + o
-> protocolo e o manifesto do host. Falta implementar o **host de native
-> messaging** no app desktop e o **pareamento** — build/run precisa do Chrome e
-> do registro do host no SO. Ver `docs/STATUS.md`.
+> **Estado:** extensão (content/background/popup) + **host de native messaging
+> implementado** (bridge `native-host/` + servidor socket no app desktop) +
+> **pareamento com aprovação na UI**. Falta apenas a **validação runtime** com o
+> Chrome real (carregar a extensão, registrar o host, preencher em uma página).
+> Ver `docs/STATUS.md`.
 
 ## Arquitetura
 
@@ -29,20 +30,35 @@ content.js  ──sendMessage──▶  background.js  ──native messaging─
 O `match` reusa `match_credentials` do core (eTLD+1, Fase 3). O framing do native
 messaging é: 4 bytes little-endian de tamanho + JSON UTF-8.
 
-## Host de native messaging (a implementar no app)
+## Host de native messaging (implementado)
 
-O host é um executável que o Chrome inicia com stdio. Caminho realista: um modo
-do app desktop (`evepass-native-host`) que:
+O host é uma **ponte fina** (`native-host/` no workspace raiz →
+`evepass-native-host`) que o Chrome inicia com stdio. Ela **não** guarda cofre:
 
-1. Lê frames stdin (len + JSON), responde em stdout.
-2. Encaminha para a `Session` viva (via IPC local com o app principal, ou é o
-   próprio app rodando).
-3. Exige o cofre **destravado**; **pareamento** com aprovação do usuário na
-   primeira conexão de cada extensão.
+1. Lê frames stdin (4 bytes len + JSON), responde em stdout.
+2. Injeta o `_origin` (a extensão chamadora, `argv[1]` do Chrome) e encaminha o
+   JSON por um **socket Unix local** (`~/.evepass/host.sock`) ao app desktop.
+3. O app (módulo `apps/desktop/src-tauri/src/host.rs`) atende contra a `Session`
+   viva: `status` sempre responde; `match`/`getCredential`/`saveCredential`
+   exigem o cofre **destravado** e a origem **pareada**. A credencial só cruza no
+   `getCredential` (momento do fill). Se o app não estiver rodando, o bridge
+   responde `{locked:true}` (status) ou um erro — degradação graciosa.
 
-Registro (macOS Chrome): copiar `native-host/com.evepass.host.json` (com o
-`path` do binário e o `allowed_origins` = id real da extensão) para
-`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`.
+**Pareamento:** a 1ª conexão de uma origem desconhecida emite `host-pair-request`;
+o app mostra um modal de aprovar/recusar e persiste a origem aprovada em settings
+(prompt único por extensão).
+
+### Registro (macOS Chrome)
+
+1. Compile o bridge: `cargo build -p evepass-native-host` (ou `--release`).
+2. Edite `native-host/com.evepass.host.json`:
+   - `path` → caminho **absoluto** do binário (`.../target/debug/evepass-native-host`
+     em dev, ou `/Applications/EVEPass.app/Contents/MacOS/evepass-native-host`
+     empacotado).
+   - `allowed_origins` → `chrome-extension://<ID real da extensão>/`.
+3. Copie esse JSON para
+   `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.evepass.host.json`.
+4. Rode o app EVEPass (destravado) e carregue a extensão (abaixo).
 
 ## Carregar em modo dev
 

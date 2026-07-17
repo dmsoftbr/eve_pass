@@ -7,6 +7,7 @@
 
 mod cache;
 mod commands;
+mod host;
 mod settings;
 mod state;
 
@@ -14,7 +15,7 @@ use std::time::Duration;
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -45,6 +46,7 @@ pub fn run() {
             hide_on_close(app.handle());
             apply_settings(app.handle(), &settings);
             spawn_auto_lock(app.handle());
+            host::spawn_server(app.handle()); // Fase 5A native-messaging bridge
             update_tray(app.handle(), false);
             Ok(())
         })
@@ -87,6 +89,17 @@ pub fn run() {
             commands::reset_password,
             commands::unlock_with_recovery,
             commands::delete_collection_cache,
+            // Fase 5A (browser-extension pairing)
+            commands::list_host_pairings,
+            commands::set_host_pairing,
+            // Fase 5B/5C/5D (post-quantum, Secret Key, passkeys)
+            commands::wrap_collection_key_for_pq,
+            commands::enable_secret_key,
+            commands::set_secret_key,
+            commands::has_secret_key,
+            commands::create_passkey,
+            commands::list_passkeys,
+            commands::passkey_sign,
         ])
         .run(tauri::generate_context!())
         .expect("error while running EVEPass");
@@ -114,6 +127,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => app.exit(0),
             _ => {}
+        })
+        // Double-clicking the menu-bar icon opens the main window directly, so the
+        // user doesn't have to right-click → "Abrir EVEPass" every time. Single
+        // (right-)click still shows the menu.
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } = event {
+                show_main(tray.app_handle());
+            }
         });
     if let Some(icon) = tray_icon(false) {
         builder = builder.icon(icon);

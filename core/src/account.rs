@@ -33,6 +33,8 @@ pub struct NewAccount {
     pub recovery_code: String,
     pub public_key: Vec<u8>,
     pub signing_public_key: Vec<u8>,
+    /// Fase 5B — ML-KEM-768 encapsulation (public) key, to publish for PQ sharing.
+    pub mlkem_public_key: Vec<u8>,
     pub wrapped_private_keys: Vec<u8>,
 }
 
@@ -63,10 +65,24 @@ pub struct PasswordReset {
     pub recovery_code: String,
 }
 
-/// The user's asymmetric keys, unwrapped into the session for HPKE sharing.
+/// Fase 5C — result of enabling a Secret Key (2SKD) on an existing account. The
+/// `secret_key` is shown once (emergency kit) and stored on-device only; the new
+/// `auth_key_b64` and `wrapped_vault_key` must replace the server-side ones. The
+/// recovery wrap is untouched (recovery bypasses the Secret Key by design).
+#[derive(uniffi::Record)]
+pub struct SecretKeyEnabled {
+    /// 128-bit Secret Key. Never sent to the server; kept on the device + kit.
+    pub secret_key: Vec<u8>,
+    pub auth_key_b64: String,
+    pub wrapped_vault_key: Vec<u8>,
+}
+
+/// The user's asymmetric keys, unwrapped into the session for sharing.
 pub(crate) struct SessionKeys {
     pub(crate) x25519: x25519_dalek::StaticSecret,
     pub(crate) ed25519: ed25519_dalek::SigningKey,
+    /// Fase 5B — ML-KEM decapsulation key, empty on accounts created before 5B.
+    pub(crate) mlkem_dk: Vec<u8>,
 }
 
 /// An unlocked vault. Holds the `vaultKey`; drop it (via `lock`) to relock.
@@ -119,6 +135,7 @@ pub fn create_account(password: String) -> Result<NewAccount> {
         recovery_code,
         public_key: kp.public_key.to_vec(),
         signing_public_key: kp.signing_public_key.to_vec(),
+        mlkem_public_key: kp.mlkem_public_key,
         wrapped_private_keys: kp.wrapped_private_keys,
     })
 }
@@ -143,6 +160,39 @@ pub fn unlock(
 ) -> Result<Arc<Session>> {
     let master = Zeroizing::new(kdf::derive_master_key(&password, &salt, &params)?);
     let (enc, _auth) = keys::derive_enc_auth(&master)?;
+    let vault_key = keys::unwrap_key(&enc, &wrapped_vault_key)?;
+    Ok(Session::from_vault_key(vault_key))
+}
+
+/// Fase 5C — derive the base64 `authKey` for an account that has a Secret Key
+/// enabled. The Secret Key salts the HKDF, so the server "password" differs from
+/// the no-secret derivation. Used by the prelogin dance on a device that holds
+/// the Secret Key.
+#[uniffi::export]
+pub fn auth_key_for_login_with_secret(
+    password: String,
+    salt: Vec<u8>,
+    params: KdfParams,
+    secret_key: Vec<u8>,
+) -> Result<String> {
+    let master = Zeroizing::new(kdf::derive_master_key(&password, &salt, &params)?);
+    let (_enc, auth) = keys::derive_enc_auth_with_secret(&master, &secret_key)?;
+    Ok(b64(auth.as_slice()))
+}
+
+/// Fase 5C — unlock an account that has a Secret Key enabled. Needs the master
+/// password AND the on-device Secret Key; a server breach + master password
+/// without the Secret Key cannot unwrap the vault key.
+#[uniffi::export]
+pub fn unlock_with_secret(
+    password: String,
+    salt: Vec<u8>,
+    params: KdfParams,
+    secret_key: Vec<u8>,
+    wrapped_vault_key: Vec<u8>,
+) -> Result<Arc<Session>> {
+    let master = Zeroizing::new(kdf::derive_master_key(&password, &salt, &params)?);
+    let (enc, _auth) = keys::derive_enc_auth_with_secret(&master, &secret_key)?;
     let vault_key = keys::unwrap_key(&enc, &wrapped_vault_key)?;
     Ok(Session::from_vault_key(vault_key))
 }
@@ -209,6 +259,30 @@ impl Session {
         let (enc, auth) = keys::derive_enc_auth(&master)?;
         let wrapped_vault_key = keys::wrap_key(&enc, &self.vault_key)?;
         Ok(PasswordChange { auth_key_b64: b64(auth.as_slice()), wrapped_vault_key })
+    }
+
+    /// Fase 5C — enable a Secret Key (2SKD) on this unlocked account. Generates a
+    /// fresh 128-bit Secret Key, re-derives `encKey`/`authKey` with it as the HKDF
+    /// salt, and re-wraps the (unchanged) vault key. The master password stays the
+    /// same; items are **not** re-encrypted. Returns the Secret Key to show once +
+    /// the new `authKey`/`wrapped_vault_key` for the shell to persist server-side.
+    pub fn enable_secret_key(
+        &self,
+        password: String,
+        salt: Vec<u8>,
+        params: KdfParams,
+    ) -> Result<SecretKeyEnabled> {
+        let mut secret = Zeroizing::new([0u8; 16]);
+        getrandom::getrandom(secret.as_mut())
+            .map_err(|e| crate::error::CoreError::Random(e.to_string()))?;
+        let master = Zeroizing::new(kdf::derive_master_key(&password, &salt, &params)?);
+        let (enc, auth) = keys::derive_enc_auth_with_secret(&master, secret.as_ref())?;
+        let wrapped_vault_key = keys::wrap_key(&enc, &self.vault_key)?;
+        Ok(SecretKeyEnabled {
+            secret_key: secret.to_vec(),
+            auth_key_b64: b64(auth.as_slice()),
+            wrapped_vault_key,
+        })
     }
 
     /// Set a new password and rotate the recovery code (used after
@@ -286,6 +360,65 @@ mod tests {
         )
         .unwrap();
         assert_eq!(session.status(), "unlocked");
+    }
+
+    #[test]
+    fn secret_key_opt_in_gates_unlock_and_changes_auth_key() {
+        let acct = create_account("master-pw".into()).unwrap();
+        let session = unlock(
+            "master-pw".into(),
+            acct.kdf_salt.clone(),
+            acct.kdf_params.clone(),
+            acct.wrapped_vault_key.clone(),
+        )
+        .unwrap();
+        let item = session.encrypt_item(r#"{"type":"login","title":"Bank"}"#.into()).unwrap();
+
+        // Enable the Secret Key on the live session.
+        let en = session
+            .enable_secret_key("master-pw".into(), acct.kdf_salt.clone(), acct.kdf_params.clone())
+            .unwrap();
+        assert_eq!(en.secret_key.len(), 16);
+        assert_ne!(en.auth_key_b64, acct.auth_key_b64, "authKey must change with the Secret Key");
+
+        // Unlock with password + Secret Key + the new wrapped key: works, item decrypts.
+        let s2 = unlock_with_secret(
+            "master-pw".into(),
+            acct.kdf_salt.clone(),
+            acct.kdf_params.clone(),
+            en.secret_key.clone(),
+            en.wrapped_vault_key.clone(),
+        )
+        .unwrap();
+        assert!(s2.decrypt_item(item).is_ok());
+
+        // Server breach + master password but NO Secret Key: the new wrapped key
+        // stays locked (plain unlock fails, and a wrong secret fails too).
+        assert!(unlock(
+            "master-pw".into(),
+            acct.kdf_salt.clone(),
+            acct.kdf_params.clone(),
+            en.wrapped_vault_key.clone(),
+        )
+        .is_err());
+        assert!(unlock_with_secret(
+            "master-pw".into(),
+            acct.kdf_salt.clone(),
+            acct.kdf_params.clone(),
+            vec![0u8; 16],
+            en.wrapped_vault_key.clone(),
+        )
+        .is_err());
+
+        // The prelogin authKey derivation matches enable's output.
+        let ak = auth_key_for_login_with_secret(
+            "master-pw".into(),
+            acct.kdf_salt.clone(),
+            acct.kdf_params.clone(),
+            en.secret_key.clone(),
+        )
+        .unwrap();
+        assert_eq!(ak, en.auth_key_b64);
     }
 
     #[test]

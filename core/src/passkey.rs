@@ -29,6 +29,17 @@ pub struct NewPasskey {
     pub public_key: Vec<u8>,
 }
 
+/// A WebAuthn assertion produced by [`passkey_assert`]: the DER signature, the
+/// public key (for the relying party), the post-assertion signature counter, and
+/// the updated item JSON (counter bumped) the shell must re-encrypt and store.
+#[derive(uniffi::Record)]
+pub struct PasskeyAssertion {
+    pub signature: Vec<u8>,
+    pub public_key: Vec<u8>,
+    pub counter: u32,
+    pub updated_item_json: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct PasskeyItem {
     #[serde(rename = "type")]
@@ -76,6 +87,29 @@ pub fn passkey_sign(item_json: String, message: Vec<u8>) -> Result<Vec<u8>> {
     Ok(sig.to_der().as_bytes().to_vec())
 }
 
+/// Sign an assertion **and** advance the passkey's signature counter — the live
+/// flow. The relying party expects the counter to increase on every use; the
+/// caller re-encrypts and stores `updated_item_json` so the next assertion counts
+/// higher. The `message` must already embed the current counter in its
+/// `authenticatorData` (the caller builds it before signing).
+#[uniffi::export]
+pub fn passkey_assert(item_json: String, message: Vec<u8>) -> Result<PasskeyAssertion> {
+    let mut item: PasskeyItem = serde_json::from_str(&item_json).map_err(|e| CoreError::Serde(e.to_string()))?;
+    let priv_bytes = Zeroizing::new(unb64(&item.private_key_b64)?);
+    let signing = SigningKey::from_slice(&priv_bytes).map_err(|e| CoreError::Crypto(format!("p256 key: {e}")))?;
+    let sig: Signature = signing.sign(&message);
+
+    let public_key = unb64(&item.public_key_b64)?;
+    item.counter = item.counter.saturating_add(1);
+    let updated_item_json = serde_json::to_string(&item).map_err(|e| CoreError::Serde(e.to_string()))?;
+    Ok(PasskeyAssertion {
+        signature: sig.to_der().as_bytes().to_vec(),
+        public_key,
+        counter: item.counter,
+        updated_item_json,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +127,23 @@ mod tests {
         assert!(vk.verify(message, &sig).is_ok());
         // A tampered message fails.
         assert!(vk.verify(b"tampered", &sig).is_err());
+    }
+
+    #[test]
+    fn assert_signs_and_bumps_counter() {
+        let pk = create_passkey("example.com".into(), "user-123".into()).unwrap();
+        let msg = b"authenticatorData||clientDataHash".to_vec();
+
+        let a1 = passkey_assert(pk.item_json.clone(), msg.clone()).unwrap();
+        assert_eq!(a1.counter, 1);
+        // The updated item carries the bumped counter; the next assertion counts higher.
+        let a2 = passkey_assert(a1.updated_item_json.clone(), msg.clone()).unwrap();
+        assert_eq!(a2.counter, 2);
+
+        // Both signatures verify against the returned public key.
+        let vk = VerifyingKey::from_sec1_bytes(&a1.public_key).unwrap();
+        assert!(vk.verify(&msg, &Signature::from_der(&a1.signature).unwrap()).is_ok());
+        assert_eq!(a1.public_key, pk.public_key);
     }
 
     #[test]

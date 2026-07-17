@@ -13,8 +13,9 @@ use std::time::Instant;
 
 use base64::Engine;
 use evepass_core::{
-    begin_login as core_begin_login, create_account as core_create_account, generate_password,
-    password_score, sha1_hex, totp_now, GenOptions, KdfParams, Session,
+    begin_login as core_begin_login, begin_login_with_secret as core_begin_login_with_secret,
+    create_account as core_create_account, create_passkey as core_create_passkey, generate_password,
+    passkey_assert, password_score, sha1_hex, totp_now, GenOptions, KdfParams, Session,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,7 +36,7 @@ fn b64d(s: &str) -> CmdResult<Vec<u8>> {
 }
 
 /// Random UUID v4 string, for new item/folder ids created offline.
-fn new_uuid() -> String {
+pub(crate) fn new_uuid() -> String {
     let mut b = [0u8; 16];
     getrandom::getrandom(&mut b).expect("os rng");
     b[6] = (b[6] & 0x0f) | 0x40; // version 4
@@ -48,7 +49,7 @@ fn new_uuid() -> String {
 
 /// Monotonic, lexically-sortable local timestamp (epoch millis, zero-padded).
 /// Server rows keep their own ISO timestamp; used only as an LWW tie-break.
-fn now_stamp() -> String {
+pub(crate) fn now_stamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     format!("{ms:015}")
@@ -66,6 +67,8 @@ pub struct NewAccountJs {
     pub recovery_code: String,
     pub public_key_b64: String,
     pub signing_public_key_b64: String,
+    /// Fase 5B — ML-KEM-768 encapsulation (public) key for PQ sharing.
+    pub mlkem_public_key_b64: String,
     pub wrapped_private_keys_b64: String,
 }
 
@@ -158,8 +161,22 @@ pub fn create_account(password: String) -> CmdResult<NewAccountJs> {
         recovery_code: a.recovery_code,
         public_key_b64: b64e(&a.public_key),
         signing_public_key_b64: b64e(&a.signing_public_key),
+        mlkem_public_key_b64: b64e(&a.mlkem_public_key),
         wrapped_private_keys_b64: b64e(&a.wrapped_private_keys),
     })
+}
+
+/// Path of this device's on-disk Secret Key (Fase 5C). Present iff the account
+/// has 2SKD enabled *and* this device holds the key. Never synced.
+fn secret_key_path(state: &AppState) -> std::path::PathBuf {
+    state.app_dir.join("secret.key")
+}
+
+/// This device's Secret Key bytes, if enabled here.
+fn read_secret_key(state: &AppState) -> Option<Vec<u8>> {
+    std::fs::read_to_string(secret_key_path(state))
+        .ok()
+        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s.trim()).ok())
 }
 
 #[tauri::command]
@@ -170,7 +187,13 @@ pub fn begin_login(
     params: KdfParams,
 ) -> CmdResult<BeginLoginJs> {
     let salt = b64d(&salt_b64)?;
-    let ctx = core_begin_login(&password, &salt, &params).map_err(|e| e.to_string())?;
+    // If this device holds a Secret Key (2SKD, Fase 5C), derive with it so the
+    // authKey/encKey match the server-side ones. Transparent to the shell.
+    let ctx = match read_secret_key(&state) {
+        Some(secret) => core_begin_login_with_secret(&password, &salt, &params, &secret),
+        None => core_begin_login(&password, &salt, &params),
+    }
+    .map_err(|e| e.to_string())?;
     let auth_key_b64 = ctx.auth_key_b64().to_string();
     let token = b64e(&{
         let mut t = [0u8; 16];
@@ -252,7 +275,7 @@ fn with_vault<T>(
 }
 
 /// Decrypt a cached item row to JSON, using the collection key when it is shared.
-fn decrypt_row(session: &Arc<Session>, row: &CacheRow) -> CmdResult<String> {
+pub(crate) fn decrypt_row(session: &Arc<Session>, row: &CacheRow) -> CmdResult<String> {
     let blob = evepass_core::Blob { envelope: row.envelope.clone() };
     match &row.collection_id {
         Some(cid) => session.decrypt_collection_item(cid.clone(), blob).map_err(|e| e.to_string()),
@@ -877,11 +900,34 @@ pub fn get_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-pub fn set_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<()> {
+pub fn set_settings(app: AppHandle, state: State<AppState>, mut settings: Settings) -> CmdResult<()> {
+    // The settings UI never sends `paired_origins`; preserve what's stored so a
+    // settings save doesn't silently unpair the browser extension.
+    settings.paired_origins = state.inner.lock().unwrap().settings.paired_origins.clone();
     settings.save(&state.app_dir).map_err(|e| e.to_string())?;
     state.inner.lock().unwrap().settings = settings.clone();
     crate::apply_settings(&app, &settings);
     Ok(())
+}
+
+/// Browser-extension pairing (Fase 5A): the list of approved origins and the
+/// approve/revoke action the UI calls when the native host asks to pair.
+#[tauri::command]
+pub fn list_host_pairings(state: State<AppState>) -> Vec<String> {
+    state.inner.lock().unwrap().settings.paired_origins.clone()
+}
+
+#[tauri::command]
+pub fn set_host_pairing(state: State<AppState>, origin: String, approved: bool) -> CmdResult<()> {
+    let mut inner = state.inner.lock().unwrap();
+    let origins = &mut inner.settings.paired_origins;
+    origins.retain(|o| o != &origin);
+    if approved {
+        origins.push(origin);
+    }
+    let settings = inner.settings.clone();
+    drop(inner);
+    settings.save(&state.app_dir).map_err(|e| e.to_string())
 }
 
 /// Frontend heartbeat that resets the inactivity auto-lock timer.
@@ -1035,6 +1081,186 @@ pub fn reset_password(
             wrapped_vault_key_b64: b64e(&r.wrapped_vault_key),
             wrapped_vault_key_recovery_b64: b64e(&r.wrapped_vault_key_recovery),
             recovery_code: r.recovery_code,
+        })
+    })
+}
+
+// ── Fase 5C — Secret Key (2SKD), opt-in ──────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SecretKeyJs {
+    /// 128-bit Secret Key (base64) — show once in the emergency kit; also stored
+    /// on this device. The shell must update the server authKey + wrapped vault key.
+    pub secret_key_b64: String,
+    pub auth_key_b64: String,
+    pub wrapped_vault_key_b64: String,
+}
+
+/// Enable a Secret Key on the unlocked account: re-derive with a fresh 128-bit
+/// secret, store it on this device, and return the new server-side material.
+#[tauri::command]
+pub fn enable_secret_key(
+    state: State<AppState>,
+    password: String,
+    salt_b64: String,
+    params: KdfParams,
+) -> CmdResult<SecretKeyJs> {
+    let salt = b64d(&salt_b64)?;
+    let out = with_vault(&state, |session, _cache| {
+        session.enable_secret_key(password, salt, params).map_err(|e| e.to_string())
+    })?;
+    // Persist the Secret Key on this device (never synced).
+    std::fs::create_dir_all(&state.app_dir).map_err(|e| e.to_string())?;
+    std::fs::write(secret_key_path(&state), b64e(&out.secret_key)).map_err(|e| e.to_string())?;
+    Ok(SecretKeyJs {
+        secret_key_b64: b64e(&out.secret_key),
+        auth_key_b64: out.auth_key_b64,
+        wrapped_vault_key_b64: b64e(&out.wrapped_vault_key),
+    })
+}
+
+/// Import an existing account's Secret Key onto this device (adding a new device).
+#[tauri::command]
+pub fn set_secret_key(state: State<AppState>, secret_key_b64: String) -> CmdResult<()> {
+    let bytes = b64d(&secret_key_b64)?;
+    if bytes.len() != 16 {
+        return Err("Secret Key deve ter 16 bytes".into());
+    }
+    std::fs::create_dir_all(&state.app_dir).map_err(|e| e.to_string())?;
+    std::fs::write(secret_key_path(&state), secret_key_b64).map_err(|e| e.to_string())
+}
+
+/// Whether this device holds a Secret Key (drives the UI hint).
+#[tauri::command]
+pub fn has_secret_key(state: State<AppState>) -> bool {
+    secret_key_path(&state).exists()
+}
+
+// ── Fase 5B — post-quantum hybrid collection wrap ────────────────────────────
+
+/// Hybrid-wrap (X25519 + ML-KEM-768) the collection key for a recipient, signed
+/// with our Ed25519 key. Needs the recipient's X25519 pub AND ML-KEM enc key.
+#[tauri::command]
+pub fn wrap_collection_key_for_pq(
+    state: State<AppState>,
+    collection_id: String,
+    recipient_pub_b64: String,
+    recipient_mlkem_ek_b64: String,
+) -> CmdResult<String> {
+    let recipient_pub = b64d(&recipient_pub_b64)?;
+    let recipient_mlkem_ek = b64d(&recipient_mlkem_ek_b64)?;
+    with_vault(&state, |session, _cache| {
+        let wrapped = session
+            .wrap_collection_key_for_pq(collection_id, recipient_pub, recipient_mlkem_ek)
+            .map_err(|e| e.to_string())?;
+        Ok(b64e(&wrapped))
+    })
+}
+
+// ── Fase 5D — passkeys (WebAuthn) as encrypted items ─────────────────────────
+
+#[derive(Serialize)]
+pub struct PasskeyCreatedJs {
+    pub id: String,
+    pub public_key_b64: String,
+}
+
+#[derive(Serialize)]
+pub struct PasskeyView {
+    pub id: String,
+    pub rp_id: String,
+    pub user_handle: String,
+    pub counter: u32,
+    pub title: String,
+}
+
+#[derive(Serialize)]
+pub struct PasskeyAssertionJs {
+    pub signature_b64: String,
+    pub public_key_b64: String,
+    pub counter: u32,
+}
+
+/// Create a passkey for `rp_id`/`user_handle`, store it as an encrypted item, and
+/// return its id + SEC1 public key (for relying-party registration).
+#[tauri::command]
+pub fn create_passkey(
+    state: State<AppState>,
+    rp_id: String,
+    user_handle: String,
+) -> CmdResult<PasskeyCreatedJs> {
+    let pk = core_create_passkey(rp_id, user_handle).map_err(|e| e.to_string())?;
+    with_vault(&state, |session, cache| {
+        let blob = session.encrypt_item(pk.item_json).map_err(|e| e.to_string())?;
+        let id = new_uuid();
+        let row = CacheRow {
+            id: id.clone(),
+            envelope: blob.envelope,
+            revision: 1,
+            updated_at: now_stamp(),
+            deleted: false,
+            dirty: true,
+            collection_id: None,
+        };
+        cache.upsert(Kind::Item, &row).map_err(|e| e.to_string())?;
+        Ok(PasskeyCreatedJs { id, public_key_b64: b64e(&pk.public_key) })
+    })
+}
+
+/// List the stored passkeys (items of type "passkey").
+#[tauri::command]
+pub fn list_passkeys(state: State<AppState>) -> CmdResult<Vec<PasskeyView>> {
+    with_vault(&state, |session, cache| {
+        let rows = cache.list(Kind::Item).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let json = decrypt_row(session, &row)?;
+            let v: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            if v["type"] == "passkey" {
+                out.push(PasskeyView {
+                    id: row.id,
+                    rp_id: v["rp_id"].as_str().unwrap_or("").to_string(),
+                    user_handle: v["user_handle"].as_str().unwrap_or("").to_string(),
+                    counter: v["counter"].as_u64().unwrap_or(0) as u32,
+                    title: v["title"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Sign a WebAuthn assertion `message` with the stored passkey, advance its
+/// counter (re-encrypt + persist), and return the DER signature + public key.
+#[tauri::command]
+pub fn passkey_sign(
+    state: State<AppState>,
+    id: String,
+    message_b64: String,
+) -> CmdResult<PasskeyAssertionJs> {
+    let message = b64d(&message_b64)?;
+    with_vault(&state, |session, cache| {
+        let row = cache.get(Kind::Item, &id).map_err(|e| e.to_string())?.ok_or("passkey not found")?;
+        let json = decrypt_row(session, &row)?;
+        let assertion = passkey_assert(json, message).map_err(|e| e.to_string())?;
+
+        // Persist the bumped counter (re-encrypt the updated item, revision+1).
+        let blob = session.encrypt_item(assertion.updated_item_json).map_err(|e| e.to_string())?;
+        let updated = CacheRow {
+            id: id.clone(),
+            envelope: blob.envelope,
+            revision: row.revision + 1,
+            updated_at: now_stamp(),
+            deleted: false,
+            dirty: true,
+            collection_id: None,
+        };
+        cache.upsert(Kind::Item, &updated).map_err(|e| e.to_string())?;
+
+        Ok(PasskeyAssertionJs {
+            signature_b64: b64e(&assertion.signature),
+            public_key_b64: b64e(&assertion.public_key),
+            counter: assertion.counter,
         })
     })
 }

@@ -24,19 +24,19 @@ mod totp;
 
 // ── Public API surface (also the UniFFI-exported surface) ──────────────────
 pub use account::{
-    auth_key_for_login, create_account, unlock, unlock_with_recovery, Blob, NewAccount,
-    PasswordChange, PasswordReset, Session,
+    auth_key_for_login, auth_key_for_login_with_secret, create_account, unlock, unlock_with_recovery,
+    unlock_with_secret, Blob, NewAccount, PasswordChange, PasswordReset, SecretKeyEnabled, Session,
 };
 pub use collections::{public_key_fingerprint, MemberRow, NewCollection};
 pub use error::CoreError;
 pub use generator::GenOptions;
 pub use health::{password_score, sha1_hex};
 pub use kdf::KdfParams;
-pub use login::{begin_login, LoginContext};
+pub use login::{begin_login, begin_login_with_secret, LoginContext};
 pub use mobile::{
     extract_credential, match_credentials, session_from_vault_key, Credential, ItemMatch, MatchItem,
 };
-pub use passkey::{create_passkey, passkey_sign, NewPasskey};
+pub use passkey::{create_passkey, passkey_assert, passkey_sign, NewPasskey, PasskeyAssertion};
 pub use totp::TotpCode;
 
 use error::Result;

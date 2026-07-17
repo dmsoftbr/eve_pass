@@ -10,10 +10,9 @@
 //! wrapped blob starts with a version byte (`0x02` = hybrid), so it coexists with
 //! the classical X25519-only wrap and can be migrated lazily.
 //!
-//! These primitives are validated by unit tests and ready to plug into the
-//! collection-wrap flow (adding ML-KEM keys to accounts/profiles is the remaining
-//! integration); not yet called from the live path, hence `allow(dead_code)`.
-#![allow(dead_code)]
+//! Wired into the live collection-wrap flow (Fase 5B): accounts carry an ML-KEM
+//! keypair ([`crate::keypair`]), and [`crate::account::Session::wrap_collection_key_for_pq`]
+//! produces a hybrid (v2) wrap that coexists with the classical HPKE (v1) wrap.
 
 use hkdf::Hkdf;
 use ml_kem::kem::{Decapsulate, Encapsulate};
@@ -28,10 +27,13 @@ use crate::{envelope, keys::KEY_LEN};
 
 /// Version marker for the hybrid wrap (distinct from the inner AEAD envelope's
 /// own version, and from the classical X25519-only collection wrap = implicit v1).
-const HYBRID_VERSION: u8 = 2;
+pub const HYBRID_VERSION: u8 = 2;
 const X_PUB_LEN: usize = 32;
 /// ML-KEM-768 ciphertext length.
 const MLKEM_CT_LEN: usize = 1088;
+/// Smallest possible hybrid wrap: version + eph X pub + ML-KEM ct + a minimal
+/// AEAD envelope (24-byte nonce + 16-byte tag over the 32-byte key).
+const HYBRID_MIN_LEN: usize = 1 + X_PUB_LEN + MLKEM_CT_LEN + 24 + 16;
 const HKDF_INFO: &[u8] = b"eve/pq-hybrid/v1";
 const AAD: &[u8] = b"eve/pq-wrapped-key";
 
@@ -62,6 +64,14 @@ fn combine(ss_x: &[u8], ss_mlkem: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     let mut out = Zeroizing::new([0u8; KEY_LEN]);
     hk.expand(HKDF_INFO, out.as_mut()).map_err(|e| CoreError::Kdf(format!("hkdf: {e}")))?;
     Ok(out)
+}
+
+/// Whether `wrapped` looks like a hybrid (v2) wrap rather than a classical HPKE
+/// (v1) collection wrap. The version byte plus the large minimum length make this
+/// unambiguous: an HPKE wrap (encapped 32 + short ciphertext + sig) is far shorter
+/// than `HYBRID_MIN_LEN`.
+pub fn is_hybrid(wrapped: &[u8]) -> bool {
+    !wrapped.is_empty() && wrapped[0] == HYBRID_VERSION && wrapped.len() >= HYBRID_MIN_LEN
 }
 
 /// Hybrid-wrap a 32-byte `key` for a recipient's (X25519 pub, ML-KEM ek).

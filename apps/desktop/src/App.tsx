@@ -1,6 +1,7 @@
 import { useVault } from "./state/vault";
 import { AuthScreen } from "./components/AuthScreen";
 import { MainWindow } from "./components/MainWindow";
+import { HostPairModal } from "./components/HostPairModal";
 import { isConfigured } from "./lib/supabase";
 
 export default function App() {
@@ -21,5 +22,11 @@ export default function App() {
     );
   }
 
-  return status === "unlocked" ? <MainWindow /> : <AuthScreen />;
+  return (
+    <>
+      {status === "unlocked" ? <MainWindow /> : <AuthScreen />}
+      {/* Only meaningful while unlocked, but the listener is cheap and harmless. */}
+      <HostPairModal />
+    </>
+  );
 }

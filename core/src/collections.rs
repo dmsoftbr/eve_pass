@@ -84,8 +84,9 @@ impl Session {
     /// Unwrap the user's X25519/Ed25519 private keys into the session (call once
     /// after unlock) to enable collection sharing.
     pub fn load_private_keys(&self, wrapped_private_keys: Vec<u8>) -> Result<()> {
-        let (x25519, ed25519) = keypair::open_private_keys(&self.vault_key, &wrapped_private_keys)?;
-        *self.keys.lock().unwrap() = Some(SessionKeys { x25519, ed25519 });
+        let m = keypair::open_private_keys(&self.vault_key, &wrapped_private_keys)?;
+        *self.keys.lock().unwrap() =
+            Some(SessionKeys { x25519: m.x25519, ed25519: m.ed25519, mlkem_dk: m.mlkem_dk });
         Ok(())
     }
 
@@ -135,8 +136,41 @@ impl Session {
         Ok(out)
     }
 
-    /// Verify + HPKE-open each membership wrap and populate the session's
-    /// collection-key map. Rows that fail verification are skipped (not fatal).
+    /// Fase 5B — hybrid (post-quantum) variant of [`Self::wrap_collection_key_for`].
+    /// Wraps the collection key with **X25519 + ML-KEM-768** (safe if either KEM
+    /// holds) and signs it with our Ed25519 key. The recipient must supply both
+    /// their X25519 public key and their ML-KEM encapsulation key.
+    /// Layout: hybrid_wrap(version 2 || eph_x || mlkem_ct || AEAD) || sig(64).
+    /// It rides the agility layer: [`Self::load_collection_keys`] dispatches on
+    /// the version byte, so v1 (HPKE) and v2 (hybrid) wraps coexist.
+    pub fn wrap_collection_key_for_pq(
+        &self,
+        collection_id: String,
+        recipient_pub: Vec<u8>,
+        recipient_mlkem_ek: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        let ck = self.collection_key(&collection_id)?;
+        let recip_x: [u8; 32] = recipient_pub
+            .as_slice()
+            .try_into()
+            .map_err(|_| CoreError::Invalid("recipient X25519 pub must be 32 bytes".into()))?;
+
+        let mut out = crate::pq::hybrid_wrap(&recip_x, &recipient_mlkem_ek, &ck)?;
+
+        // Sign (collection_id || hybrid_wrap) with our Ed25519 key, same shape as
+        // the HPKE path so verification is uniform.
+        let sig = self.with_keys(|k| {
+            let mut msg = Vec::with_capacity(collection_id.len() + out.len());
+            msg.extend_from_slice(collection_id.as_bytes());
+            msg.extend_from_slice(&out);
+            k.ed25519.sign(&msg)
+        })?;
+        out.extend_from_slice(&sig.to_bytes());
+        Ok(out)
+    }
+
+    /// Verify + open each membership wrap (HPKE v1 or hybrid v2) and populate the
+    /// session's collection-key map. Rows that fail verification are skipped.
     pub fn load_collection_keys(&self, members: Vec<MemberRow>) -> Result<()> {
         for m in members {
             if let Ok(key) = self.open_wrapped_key(&m) {
@@ -199,11 +233,11 @@ impl Session {
         if w.len() < ENCAPPED_LEN + SIG_LEN {
             return Err(CoreError::InvalidEnvelope("wrapped key too short".into()));
         }
-        let encapped = &w[..ENCAPPED_LEN];
+        let body = &w[..w.len() - SIG_LEN];
         let sig_bytes = &w[w.len() - SIG_LEN..];
-        let ciphertext = &w[ENCAPPED_LEN..w.len() - SIG_LEN];
 
-        // Verify the sharer's signature over (collection_id || encapped || ct).
+        // Verify the sharer's signature over (collection_id || body). The body is
+        // the whole wrap sans signature, for both HPKE (encapped||ct) and hybrid.
         let vk = VerifyingKey::from_bytes(
             m.sender_signing_pub
                 .as_slice()
@@ -214,13 +248,25 @@ impl Session {
         let sig = Signature::from_bytes(
             sig_bytes.try_into().map_err(|_| CoreError::Invalid("bad signature".into()))?,
         );
-        let mut signed = Vec::with_capacity(m.collection_id.len() + ENCAPPED_LEN + ciphertext.len());
+        let mut signed = Vec::with_capacity(m.collection_id.len() + body.len());
         signed.extend_from_slice(m.collection_id.as_bytes());
-        signed.extend_from_slice(encapped);
-        signed.extend_from_slice(ciphertext);
+        signed.extend_from_slice(body);
         vk.verify(&signed, &sig).map_err(|_| CoreError::Decrypt)?;
 
-        // HPKE-open with our X25519 private key.
+        // Dispatch on the version byte: hybrid (v2) vs classical HPKE (v1).
+        if crate::pq::is_hybrid(body) {
+            let x_priv = self.with_keys(|k| k.x25519.to_bytes())?;
+            let mlkem_dk = self.with_keys(|k| k.mlkem_dk.clone())?;
+            if mlkem_dk.is_empty() {
+                return Err(CoreError::Invalid("no ML-KEM key for this account".into()));
+            }
+            let key = crate::pq::hybrid_unwrap(&x_priv, &mlkem_dk, body)?;
+            return Ok(key);
+        }
+
+        // HPKE v1: encapped(32) || ciphertext.
+        let encapped = &body[..ENCAPPED_LEN];
+        let ciphertext = &body[ENCAPPED_LEN..];
         let sk = self.with_keys(|k| k.x25519.to_bytes())?;
         let sk_recip = <Kem as KemTrait>::PrivateKey::from_bytes(&sk)
             .map_err(|e| CoreError::Crypto(format!("recip sk: {e:?}")))?;
@@ -290,6 +336,62 @@ mod tests {
         let got = bob.decrypt_collection_item(nc.collection_id.clone(), blob).unwrap();
         assert!(got.contains("Datasul"));
         assert_eq!(bob.decrypt_collection_name(nc.collection_id, nc.name_ciphertext).unwrap(), "Clientes");
+    }
+
+    #[test]
+    fn share_collection_pq_hybrid_between_two_users() {
+        // Admin creates a collection + item.
+        let (admin_acct, admin) = account_and_session("admin-pw");
+        let nc = admin.create_collection("PQ Team".into()).unwrap();
+        let blob = admin
+            .encrypt_collection_item(nc.collection_id.clone(), r#"{"type":"login","title":"Cofre","password":"pq-secret"}"#.into())
+            .unwrap();
+
+        let (bob_acct, bob) = account_and_session("bob-pw");
+
+        // Admin hybrid-wraps the collection key for Bob's X25519 + ML-KEM keys.
+        let wrapped = admin
+            .wrap_collection_key_for_pq(
+                nc.collection_id.clone(),
+                bob_acct.public_key.clone(),
+                bob_acct.mlkem_public_key.clone(),
+            )
+            .unwrap();
+        // It really is a hybrid (v2) wrap.
+        assert!(crate::pq::is_hybrid(&wrapped[..wrapped.len() - SIG_LEN]));
+
+        // Bob loads it (signature verified, hybrid-unwrapped) and decrypts.
+        bob.load_collection_keys(vec![MemberRow {
+            collection_id: nc.collection_id.clone(),
+            wrapped_collection_key: wrapped,
+            sender_signing_pub: admin_acct.signing_public_key.clone(),
+        }])
+        .unwrap();
+        let got = bob.decrypt_collection_item(nc.collection_id.clone(), blob).unwrap();
+        assert!(got.contains("Cofre"));
+    }
+
+    #[test]
+    fn pq_wrap_rejects_forged_signature() {
+        // The Ed25519 signature still authenticates the sharer on the hybrid path.
+        let (_admin_acct, admin) = account_and_session("admin-pw");
+        let nc = admin.create_collection("PQ".into()).unwrap();
+        let (bob_acct, bob) = account_and_session("bob-pw");
+        let wrapped = admin
+            .wrap_collection_key_for_pq(
+                nc.collection_id.clone(),
+                bob_acct.public_key.clone(),
+                bob_acct.mlkem_public_key.clone(),
+            )
+            .unwrap();
+        let (attacker_acct, _a) = account_and_session("atk-pw");
+        bob.load_collection_keys(vec![MemberRow {
+            collection_id: nc.collection_id.clone(),
+            wrapped_collection_key: wrapped,
+            sender_signing_pub: attacker_acct.signing_public_key.clone(), // wrong signer
+        }])
+        .unwrap();
+        assert!(bob.decrypt_collection_name(nc.collection_id, nc.name_ciphertext).is_err());
     }
 
     #[test]

@@ -18,7 +18,28 @@ export interface NewAccountJs {
   recovery_code: string;
   public_key_b64: string;
   signing_public_key_b64: string;
+  mlkem_public_key_b64: string;
   wrapped_private_keys_b64: string;
+}
+
+export interface SecretKeyJs {
+  secret_key_b64: string;
+  auth_key_b64: string;
+  wrapped_vault_key_b64: string;
+}
+
+export interface PasskeyView {
+  id: string;
+  rp_id: string;
+  user_handle: string;
+  counter: number;
+  title: string;
+}
+
+export interface PasskeyAssertionJs {
+  signature_b64: string;
+  public_key_b64: string;
+  counter: number;
 }
 
 export interface BeginLoginJs {
@@ -188,4 +209,26 @@ export const ipc = {
     invoke<PasswordResetJs>("reset_password", { newPassword, saltB64, params }),
   unlockWithRecovery: (recoveryCode: string, wrappedVaultKeyRecoveryB64: string) =>
     invoke<void>("unlock_with_recovery", { recoveryCode, wrappedVaultKeyRecoveryB64 }),
+
+  // Fase 5A (browser-extension pairing)
+  listHostPairings: () => invoke<string[]>("list_host_pairings"),
+  setHostPairing: (origin: string, approved: boolean) =>
+    invoke<void>("set_host_pairing", { origin, approved }),
+
+  // Fase 5C (Secret Key / 2SKD, opt-in)
+  enableSecretKey: (password: string, saltB64: string, params: KdfParams) =>
+    invoke<SecretKeyJs>("enable_secret_key", { password, saltB64, params }),
+  setSecretKey: (secretKeyB64: string) => invoke<void>("set_secret_key", { secretKeyB64 }),
+  hasSecretKey: () => invoke<boolean>("has_secret_key"),
+
+  // Fase 5B (post-quantum hybrid collection wrap)
+  wrapCollectionKeyForPq: (collectionId: string, recipientPubB64: string, recipientMlkemEkB64: string) =>
+    invoke<string>("wrap_collection_key_for_pq", { collectionId, recipientPubB64, recipientMlkemEkB64 }),
+
+  // Fase 5D (passkeys)
+  createPasskey: (rpId: string, userHandle: string) =>
+    invoke<{ id: string; public_key_b64: string }>("create_passkey", { rpId, userHandle }),
+  listPasskeys: () => invoke<PasskeyView[]>("list_passkeys"),
+  passkeySign: (id: string, messageB64: string) =>
+    invoke<PasskeyAssertionJs>("passkey_sign", { id, messageB64 }),
 };

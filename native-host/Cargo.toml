@@ -1,0 +1,13 @@
+[package]
+name = "evepass-native-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "evepass-native-host"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }

@@ -1,6 +1,6 @@
 # EVEPass — Status de implementação
 
-> Fonte única de progresso. Atualizado em **2026-07-09**.
+> Fonte única de progresso. Atualizado em **2026-07-17**.
 > (Mobile Android M1–M4 construídos e validados no emulador: cofre online + biometria + autofill
 > (serviço registrado) + coleções/HPKE. APK release roda no device. Aceites finais no aparelho físico:
 > biometria real, autofill em app nativo, sharing com 2ª conta.)
@@ -19,12 +19,13 @@
 | 2 | Experiência premium (palette, tray, smart views, TOTP, auto-lock, import) | ✅ | 🟡 |
 | 3 | Mobile (RN) + autofill nativo | 🟡 parcial | — |
 | 4 | Time (collections + HPKE sharing + recovery polido) | ✅ (desktop) | 🟡 |
-| 5 | Opcionais (browser ext, pós-quântico, Secret Key, passkeys) | 🟡 parcial | — |
+| 5 | Opcionais (browser ext, pós-quântico, Secret Key, passkeys) | ✅ core+comandos | 🟡 |
 
-**Testes automatizados:** `evepass-core` — **57/57** passam (vetores RFC:
+**Testes automatizados:** `evepass-core` — **61/61** passam (vetores RFC:
 Argon2id 9106, HKDF 5869, XChaCha20-Poly1305, X25519 7748, Ed25519 8032; matching
 eTLD+1; caminho biométrico; sharing HPKE E2E + assinatura + rotação; **pós-quântico
-híbrido** X25519+ML-KEM-768; **Secret Key** 2SKD; **passkey** P-256 ES256).
+híbrido** X25519+ML-KEM-768 wired no share + dispatch por versão; **Secret Key**
+2SKD opt-in; **passkey** P-256 ES256 + assert com counter).
 **Builds:** frontend (`tsc + vite`) e backend Tauri (`cargo`) sem warnings; core
 compila para **iOS** (xcframework) e **Android** (.so) via UniFFI.
 
@@ -64,7 +65,11 @@ compila para **iOS** (xcframework) e **Android** (.so) via UniFFI.
 - [x] Breach HIBP k-anonymity (`breach_prefixes`/`resolve_breaches`; hashes ficam no Rust)
 - [x] TOTP ao vivo (`item_totp`) + anel de contador no detalhe
 - [x] Command palette (2ª janela sem moldura + hotkey global) + `palette_search`
+- [x] Palette destrava inline com o cofre travado (encaminha a senha-mestra à
+      janela principal, que faz o login com o e-mail lembrado); hits decifrados
+      são limpos ao travar (sem vazamento na janela travada)
 - [x] Tray/menu bar com estado 🔒/🔓 + esconder ao fechar + iniciar no login
+      + **duplo clique abre a janela principal** (botão direito ainda abre o menu)
 - [x] Auto-lock por inatividade (timer + evento `vault-locked`) + limpeza de clipboard
 - [x] Import (Bitwarden JSON / NordPass / CSV genérico com mapeamento)
 - [x] Configurações (tema, auto-lock, clipboard, hotkey, autostart) persistidas
@@ -198,26 +203,44 @@ políticas RLS de collections/membros/itens compartilhados, `sender_signing_pub`
 
 ## Fase 5 — Opcionais 🟡 (parcial)
 
-Módulos independentes. Os dois habilitados pela camada de agilidade (5B, 5C) e o
-core de passkeys (5D) estão **implementados e testados**; a extensão (5A) é scaffold.
+Módulos independentes. 5A (host + pareamento), 5B (PQ no compartilhamento), 5C
+(Secret Key opt-in) e 5D (passkeys) estão **wired no core + comandos desktop e
+testados**; resta a validação runtime e as pontas de shell/SQL/UX indicadas.
 
-- [x] **5B — Pós-quântico híbrido** (`core/src/pq.rs`): `hybrid_wrap`/`hybrid_unwrap`
-      com **X25519 + ML-KEM-768** combinados via HKDF, sob nova versão de envelope
-      (`0x02`). 4 testes: round-trip, o KEM PQ e o clássico ambos contribuem
-      (chave errada de qualquer um falha), dispatch por versão. *Só a camada
-      assimétrica muda; a de repouso (XChaCha20) não.* Integração no wrap de
-      collection (ML-KEM nos profiles) é o passo restante.
-- [x] **5C — Secret Key (2SKD)** (`core/src/keys.rs::derive_enc_auth_with_secret`):
-      HKDF com salt = Secret Key de 128 bits. Teste prova que breach do servidor +
-      senha-mestra **sem** a Secret Key não desembrulha a vaultKey. Onboarding/UX é
-      o passo restante.
-- [x] **5D — Passkeys** (`core/src/passkey.rs`): `create_passkey` (par P-256 +
-      rpId/userHandle como item cifrado), `passkey_sign` (assertion WebAuthn ES256,
-      DER). 2 testes: create→sign→verify + tipo de item. Providers (iOS/Android da
-      Fase 3, extensão 5A) são a integração restante.
-- [~] **5A — Extensão de navegador** (`apps/browser-extension/`): MV3
+- [x] **5B — Pós-quântico híbrido** (`core/src/pq.rs`) **wired no compartilhamento**:
+      contas geram par **ML-KEM-768** (`keypair.rs`: dk no blob de chaves privadas,
+      ek público em `NewAccount`); `Session::wrap_collection_key_for_pq`
+      hybrid-wrap (X25519+ML-KEM) + assinatura Ed25519; `load_collection_keys`
+      faz **dispatch por versão** (`pq::is_hybrid`) → HPKE v1 e híbrido v2
+      coexistem. Comando desktop `wrap_collection_key_for_pq`. Testes: share PQ
+      entre 2 usuários + rejeição de assinatura forjada (61 testes no total).
+  - [ ] 🟡 Restante (SQL/shell): coluna `mlkem_public_key` em `public_keys`/`profiles`
+        + fetch do ek do destinatário no shell para usar o wrap PQ ao vivo.
+- [x] **5C — Secret Key (2SKD)** (`core/src/keys.rs`) **wired opt-in**:
+      `Session::enable_secret_key` (gera secret de 128 bits, re-deriva+re-wrap),
+      `unlock_with_secret`/`begin_login_with_secret`/`auth_key_for_login_with_secret`.
+      Desktop: store local `secret.key` + comandos `enable/set/has_secret_key`;
+      `begin_login` usa a Secret Key automaticamente se o device a tiver. Teste
+      prova que breach do servidor + senha-mestra **sem** a Secret Key não abre.
+  - [ ] 🟡 Restante (shell/UX): tela de ativar nas configs (mostrar no kit) +
+        importar em novo device + atualizar authKey/wrapped no Supabase.
+        Limitação atual: um `secret.key` por instalação (conta única no device).
+- [x] **5D — Passkeys** (`core/src/passkey.rs`) **wired**: `passkey_assert`
+      (assina + incrementa o counter WebAuthn, devolve item atualizado). Comandos
+      desktop `create_passkey`/`list_passkeys`/`passkey_sign` (passkey como item
+      cifrado; counter persistido). Testes: create→sign→verify + assert+counter.
+  - [ ] 🟡 Restante: cerimônia WebAuthn no navegador (extensão 5A intercepta
+        `navigator.credentials`) / providers iOS/Android.
+- [x] **5A — Extensão de navegador** (`apps/browser-extension/`): MV3
       (content/background/popup) + protocolo de native messaging
-      (`status/match/getCredential/saveCredential`, reusa `match_credentials`) +
-      manifesto do host. Falta o **host no app desktop** + pareamento; build/run
-      precisa do Chrome + registro do host.
-- [ ] ⬜ Integração viva de 5B/5C/5D no fluxo de conta/UI + 5A host + validação runtime.
+      (`status/match/getCredential/saveCredential`, reusa `match_credentials`).
+      **Host implementado:** bridge fino `native-host/` (`evepass-native-host`,
+      Chrome stdio ↔ socket Unix `~/.evepass/host.sock`, injeta `_origin`) +
+      servidor no app (`src-tauri/src/host.rs`) que atende contra a `Session`
+      viva (exige destravado + origem pareada; credencial só cruza no
+      `getCredential`) + **pareamento com aprovação na UI** (`HostPairModal`,
+      origens aprovadas em settings). Bridge testado ponta a ponta (framing +
+      injeção de origem + degradação com app fora do ar).
+  - [ ] 🟡 Validação runtime: carregar a extensão no Chrome, registrar o host,
+        parear e preencher em uma página real (precisa do Chrome + display).
+- [ ] ⬜ Integração viva de 5B/5C/5D no fluxo de conta/UI + validação runtime.

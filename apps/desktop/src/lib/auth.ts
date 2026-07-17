@@ -4,6 +4,16 @@
 import { ipc } from "./ipc";
 import * as sb from "./supabase";
 
+// Only the e-mail is ever remembered (never the master password). Shared by the
+// AuthScreen (writes it) and the command palette's inline unlock (reads it via
+// the main window). Absent when "Lembrar e-mail" is off.
+export const LAST_EMAIL_KEY = "evepass:lastEmail";
+
+/** The remembered login e-mail, or null if the user opted out. */
+export function rememberedEmail(): string | null {
+  return localStorage.getItem(LAST_EMAIL_KEY);
+}
+
 /** Establish an unlocked session; returns the Supabase user id. */
 async function establishSession(email: string, password: string): Promise<string> {
   const { saltB64, params } = await sb.preloginParams(email);

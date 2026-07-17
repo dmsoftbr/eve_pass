@@ -13,6 +13,10 @@ pub struct Settings {
     pub global_hotkey: String,
     /// "light" | "dark" | "system"
     pub theme: String,
+    /// Browser-extension origins the user has approved for native messaging
+    /// (Fase 5A). `#[serde(default)]` keeps old settings files loadable.
+    #[serde(default)]
+    pub paired_origins: Vec<String>,
 }
 
 impl Default for Settings {
@@ -23,6 +27,7 @@ impl Default for Settings {
             launch_at_login: false,
             global_hotkey: "Alt+Space".into(),
             theme: "system".into(),
+            paired_origins: Vec::new(),
         }
     }
 }

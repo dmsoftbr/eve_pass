@@ -10,10 +10,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { ipc, type FolderView, type HealthReport, type ItemView } from "../lib/ipc";
-import { doLock, doLogin, doSignup } from "../lib/auth";
-import { pushSaved, startSync } from "../lib/sync";
+import { doLock, doLogin, doSignup, rememberedEmail } from "../lib/auth";
+import { drainPending, pushSaved, startSync } from "../lib/sync";
 import { computeBreached } from "../lib/health";
 import * as sb from "../lib/supabase";
 
@@ -272,6 +272,45 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       void un.then((f) => f());
     };
   }, []);
+
+  // The browser-extension native host saved a credential straight into the
+  // cache (dirty); flush it to the server and refresh the list.
+  useEffect(() => {
+    const un = listen("host-item-saved", async () => {
+      if (userId.current) await drainPending(userId.current);
+      await refresh();
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [refresh]);
+
+  // The command palette can unlock the vault inline. It has no network context
+  // of its own, so it forwards the master password here (in-process event) and
+  // we run the normal login with the remembered e-mail. The password never
+  // touches the server as-is — begin_login turns it into the authKey in Rust.
+  useEffect(() => {
+    const un = listen<{ password: string }>("palette-unlock", async (e) => {
+      const email = rememberedEmail();
+      if (!email) {
+        void emit("palette-unlock-error", {
+          message: "Ative “Lembrar e-mail” e faça login uma vez para destravar pelo palette.",
+        });
+        return;
+      }
+      try {
+        await login(email, e.payload.password);
+        void emit("vault-unlocked", {});
+      } catch (err) {
+        void emit("palette-unlock-error", {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [login]);
 
   // Activity heartbeat (throttled) so the Rust auto-lock knows we're active.
   useEffect(() => {
