@@ -7,6 +7,10 @@
 
 mod cache;
 mod commands;
+// The native-messaging bridge uses Unix domain sockets (Chrome host ⇄ app),
+// which are unix-only. On Windows the module is absent (a named-pipe transport
+// would be the equivalent; not implemented — this is a macOS-first app).
+#[cfg(unix)]
 mod host;
 mod settings;
 mod state;
@@ -46,6 +50,7 @@ pub fn run() {
             hide_on_close(app.handle());
             apply_settings(app.handle(), &settings);
             spawn_auto_lock(app.handle());
+            #[cfg(unix)]
             host::spawn_server(app.handle()); // Fase 5A native-messaging bridge
             update_tray(app.handle(), false);
             Ok(())
