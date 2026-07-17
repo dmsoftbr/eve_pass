@@ -155,9 +155,21 @@ jobs:
         working-directory: apps/mobile/react-native-evepass-core
         run: yarn install --immutable
 
-      - name: Build core + bindings + .so (UBRN)
+      # Turbo module: gera bindings (cpp/ts) + a .a estática que o CMake linka no
+      # libappmodules.so. --release p/ não deixar o Argon2id lento no app.
+      # Só as 2 ABIs que o app empacota (targets Rust instalados acima); sem isso
+      # o ubrn tenta armv7+x86 e falha com E0463 (target ausente).
+      - name: Build turbo module core + bindings (UBRN)
         working-directory: apps/mobile/react-native-evepass-core
-        run: ./node_modules/.bin/ubrn build android --config ubrn.config.yaml
+        run: ./node_modules/.bin/ubrn build android --release --config ubrn.config.yaml --targets arm64-v8a,x86_64
+
+      # libevepass_core.so (cdylib) que o módulo de autofill carrega via JNA —
+      # empacotado direto no APK a partir do jniLibs do example.
+      - name: Build libevepass_core.so (autofill) into example jniLibs
+        run: |
+          cargo ndk -t arm64-v8a -t x86_64 \
+            -o apps/mobile/react-native-evepass-core/example/android/app/src/main/jniLibs \
+            build -p evepass-core --release
 
       - name: Decode release keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
